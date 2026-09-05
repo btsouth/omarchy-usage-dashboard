@@ -1,0 +1,12 @@
+{
+  "source": "OpenCode Go official documentation",
+  "url": "https://opencode.ai/docs/go/#usage-limits",
+  "verifiedAt": "2026-09-05",
+  "models": {
+    "opencode-go/glm-5.3-flash": {
+      "input_cost_per_token": 0.00000015,
+      "output_cost_per_token": 0.00000050,
+      "cache_read_input_token_cost": 0.00000003
+    }
+  }
+}
