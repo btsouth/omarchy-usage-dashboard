@@ -9,7 +9,7 @@
 - Gemini CLI, general OpenCode, Pi, and Oh My Pi history, with source-route breakdowns.
 - Detect active sources on first use and adapt layouts to the enabled providers.
 - Refresh Grok quota after login and request fresh limits on manual Refresh.
-- Fix reopening an existing dashboard window.
+- Reopen unmapped dashboard windows and focus the correct instance across workspaces.
 - Keep provider colors readable on light and dark backgrounds.
 
 ## Initial package

@@ -174,7 +174,12 @@ Scope {
         target: "analytics"
         function quit(): void { Qt.quit() }
         function refresh(): void { root.refreshLive() }
-        function showWindow(): void { window.visible = true; root.refresh() }
+        function showWindow(): int {
+            // Hot reload or a compositor close can leave visible true without a mapped window.
+            if (!window.backingWindowVisible) window.visible = false
+            Qt.callLater(function() { window.visible = true; root.refresh() })
+            return Quickshell.processId
+        }
         function capture(path: string): void { captureRoot.grabToImage(result => result.saveToFile(path)) }
         function captureTooltip(path: string): void { chartTip.contentItem.grabToImage(result => result.saveToFile(path)) }
         function account(id: string): void { root.drill("account", id, "") }
