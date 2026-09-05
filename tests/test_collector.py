@@ -81,6 +81,104 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(c.price(r, {}), (None, None))
         self.assertEqual(c.price(r, {'missing': {'input_cost_per_token': 0, 'output_cost_per_token': 0}}), (0, 0))
 
+    def grok_event(self, session='s', event='event', usage=None):
+        return {'timestamp': 1788580000, 'params': {'sessionId': session, '_meta': {'eventId': event},
+                'update': {'sessionUpdate': 'turn_completed', 'prompt_id': 'prompt', 'usage': usage or {
+                    'inputTokens': 1000, 'cachedReadTokens': 800, 'outputTokens': 100,
+                    'reasoningTokens': 40, 'modelCalls': 17, 'costUsdTicks': 5912850000}}}}
+
+    def test_grok_cache_reasoning_cost_and_copied_events(self):
+        path = self.transcript('project/session/updates.jsonl', [self.grok_event(), self.grok_event('fork')])
+        ledger = c.Ledger(self.root / 'grok.sqlite')
+        for r in c.grok_records(path): ledger.put(r)
+        ledger.db.row_factory = sqlite3.Row
+        rows = ledger.db.execute('SELECT * FROM events').fetchall()
+        self.assertEqual(len(rows), 1)
+        r = dict(rows[0])
+        self.assertEqual((r['input'], r['cacheRead'], r['output'], r['reasoning'], r['modelCalls']), (200, 800, 100, 40, 17))
+        self.assertEqual(sum(r[f] for f in c.FIELDS[:4]), 1100)
+        self.assertAlmostEqual(c.price(r, {})[0], .591285)
+        ledger.db.close()
+
+    def test_grok_per_model_usage_does_not_duplicate_aggregate(self):
+        usage = {'inputTokens': 300, 'outputTokens': 30, 'costUsdTicks': 3000000000,
+                 'modelUsage': {'one': {'inputTokens': 100, 'outputTokens': 10, 'costUsdTicks': 1000000000},
+                                'two': {'inputTokens': 200, 'outputTokens': 20}}}
+        path = self.transcript('updates.jsonl', [self.grok_event(usage=usage)])
+        rows = list(c.grok_records(path))
+        self.assertEqual(sum(r['input'] + r['output'] for r in rows), 330)
+        self.assertEqual(c.price(rows[0], {})[0], .1)
+        self.assertEqual(c.price(rows[1], {}), (None, None))
+        usage['modelUsage'].pop('one')
+        path = self.transcript('updates.jsonl', [self.grok_event(usage=usage)])
+        self.assertEqual(c.price(next(c.grok_records(path)), {})[0], .3)
+
+    def test_grok_missing_usage_is_not_invented(self):
+        event = self.grok_event(); event['params']['update'].pop('usage')
+        path = self.transcript('updates.jsonl', [event, self.grok_event(usage={'inputTokens': 5})])
+        rows = list(c.grok_records(path))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(c.price(rows[0], {'unknown': {'input_cost_per_token': 1}}), (None, None))
+
+    def test_grok_billing_requires_valid_message_and_success(self):
+        def frame(data, flag=0): return bytes([flag]) + len(data).to_bytes(4, 'big') + data
+        body = b'\x0a\x05\x0d' + c.struct.pack('<f', 42.5)
+        self.assertEqual(c.grok_billing(frame(body))[0]['percent'], .425)
+        self.assertEqual(c.grok_billing(frame(b'\x0a\x00'))[0]['percent'], 0)
+        for raw in [b'', frame(b''), frame(body)[:-1], frame(body) + frame(b'grpc-status: 16\r\n', 128)]:
+            with self.assertRaises(ValueError): c.grok_billing(raw)
+
+    def test_grok_expired_auth_stays_untouched_and_retains_stale_quota(self):
+        home = self.root / 'grok'; home.mkdir()
+        auth = home / 'auth.json'; auth.write_text(json.dumps({'account': {'key': 'test', 'expires_at': '2000-01-01T00:00:00Z'}}))
+        before = auth.read_bytes()
+        with patch.object(c, 'STATE', self.root / 'state'), patch.dict('os.environ', {'GROK_HOME': str(home)}), patch.object(c.urllib.request, 'urlopen') as request:
+            c.atomic_json(c.STATE / 'grok-quota.json', {'limits': [{'percent': .3}], 'updatedAt': '2000-01-01T00:00:00Z'})
+            quota = c.grok_quota(True)
+            self.assertIn('expired', quota['error'])
+            self.assertEqual(quota['limits'][0]['percent'], .3)
+            request.assert_not_called()
+        self.assertEqual(auth.read_bytes(), before)
+
+    def test_grok_request_errors_do_not_expose_credentials(self):
+        home = self.root / 'grok'; home.mkdir()
+        (home / 'auth.json').write_text(json.dumps({'account': {'key': 'private-test-key'}}))
+        with patch.object(c, 'STATE', self.root / 'state'), patch.dict('os.environ', {'GROK_HOME': str(home)}), patch.object(c.urllib.request, 'urlopen', side_effect=ValueError('Invalid header: private-test-key')):
+            quota = c.grok_quota(True)
+            self.assertNotIn('private-test-key', json.dumps(quota))
+
+    def test_grok_login_invalidates_cached_signout(self):
+        import io
+        home = self.root / 'grok'; home.mkdir()
+        auth = home / 'auth.json'
+        auth.write_text(json.dumps({'account': {'key': 'old', 'expires_at': '2000-01-01T00:00:00Z'}}))
+        with patch.object(c, 'STATE', self.root / 'state'), patch.dict('os.environ', {'GROK_HOME': str(home)}):
+            self.assertIn('expired', c.grok_quota()['error'])
+            auth.write_text(json.dumps({'account': {'key': 'new-valid-login'}}))
+            with patch.object(c.urllib.request, 'urlopen', return_value=io.BytesIO(b'\x00\x00\x00\x00\x02\x0a\x00')) as request:
+                self.assertEqual(c.grok_quota()['error'], '')
+                request.assert_called_once()
+
+    def test_existing_ledger_migrates_without_losing_events(self):
+        path = self.root / 'old.sqlite'; db = sqlite3.connect(path)
+        db.execute('CREATE TABLE events (id TEXT PRIMARY KEY, provider, session, ts, model, project, client, input, output, cacheRead, cacheWrite, cacheWrite1h, reasoning)')
+        db.execute("INSERT INTO events VALUES ('old','codex','s',1,'m','','CLI',10,20,0,0,0,0)")
+        db.commit(); db.close()
+        ledger = c.Ledger(path)
+        self.assertEqual(ledger.db.execute('SELECT input,output,reportedCostTicks FROM events').fetchone(), (10, 20, None))
+        ledger.db.close()
+
+    def test_grok_bar_keeps_history_visible_during_quiet_week(self):
+        ledger = c.Ledger(self.root / 'bar.sqlite')
+        ledger.put(c.record('old', 'grok', 's', '2020-01-01T12:00:00Z', 'grok', '', 'Grok Build', input=10))
+        with patch.object(c, 'STATE', self.root / 'state'), patch.object(c, 'quota', return_value={'limits': []}):
+            c.write_agent_record(ledger, 'grok')
+            bar = json.loads((c.STATE.parent / 'agents/usage/grok.json').read_text())
+            self.assertTrue(bar['ready'])
+            self.assertEqual((bar['totalSessions'], bar['totalPrompts'], bar['activeDays']), (1, 1, 1))
+            self.assertEqual(bar['todayTotalTokens'], 0)
+        ledger.db.close()
+
     def test_cache_price_and_long_context(self):
         r = c.record('1', 'codex', 's', 1, 'm', '', 'CLI', input=200000, cacheRead=100000, output=10)
         catalog = {'m': {'input_cost_per_token': 1e-6, 'input_cost_per_token_above_272k_tokens': 2e-6,
@@ -117,8 +215,104 @@ class CollectorTests(unittest.TestCase):
               'CODEX_HOME': str(self.root / 'codex'), 'CLAUDE_CONFIG_DIR': str(self.root / 'claude')}):
             ledger.scan(c.DEFAULTS)
             ledger.scan(c.DEFAULTS)
-        self.assertEqual(ledger.db.execute('SELECT COUNT(*),SUM(output),SUM(cacheRead) FROM events').fetchone(), (1, 25, 30))
+        self.assertEqual(ledger.db.execute("SELECT COUNT(*),SUM(output),SUM(cacheRead) FROM events WHERE provider='opencode-go'").fetchone(), (1, 25, 30))
+        self.assertEqual(ledger.db.execute("SELECT COUNT(*),SUM(output) FROM events WHERE provider='opencode'").fetchone(), (3, 75))
         ledger.db.close()
+
+    def test_gemini_migration_rewind_and_stream_updates(self):
+        message = {'id': 'gemini-msg', 'type': 'gemini', 'timestamp': '2026-09-04T12:00:00Z',
+                   'model': 'gemini-3.8-flash', 'tokens': {'input': 100, 'cached': 70, 'output': 20, 'thoughts': 10, 'total': 130}}
+        legacy = self.root / 'session-old.json'
+        legacy.write_text(json.dumps({'sessionId': 's', 'projectHash': 'project', 'messages': [message]}))
+        modern = self.transcript('session-new.jsonl', [{'sessionId': 's', 'projectHash': 'project'},
+            message | {'tokens': None}, message, {'$rewindTo': 'gemini-msg'}, {'$set': {'messages': [message]}}])
+        ledger = c.Ledger(self.root / 'gemini.sqlite')
+        for path in [legacy, modern]:
+            for record in c.gemini_records(path): ledger.put(record)
+        self.assertEqual(ledger.db.execute('SELECT COUNT(*),SUM(input),SUM(output),SUM(cacheRead),SUM(reasoning) FROM events').fetchone(), (1, 30, 30, 70, 10))
+        ledger.db.close()
+
+    def test_gemini_scans_nested_subagents_and_additional_home(self):
+        root = self.root / 'gemini'
+        message = {'id': 'subagent-message', 'type': 'gemini', 'timestamp': 1788580000,
+                   'tokens': {'input': 100, 'output': 20, 'thoughts': 10, 'tool': 5, 'total': 135}}
+        self.transcript('gemini/tmp/project/chats/parent/agent.jsonl', [{'sessionId': 'subagent', 'projectHash': 'p'}, message])
+        ledger = c.Ledger(self.root / 'scan.sqlite')
+        with patch.object(c, 'HOME', self.root), patch.dict('os.environ', {
+            'CODEX_HOME': str(self.root / 'codex'), 'CLAUDE_CONFIG_DIR': str(self.root / 'claude'),
+            'GROK_HOME': str(self.root / 'grok'), 'PI_CODING_AGENT_DIR': str(self.root / 'pi'), 'XDG_DATA_HOME': str(self.root / 'data')}):
+            ledger.scan(c.DEFAULTS | {'geminiHomes': [str(root)]})
+            ledger.scan(c.DEFAULTS | {'geminiHomes': [str(root)]})
+        self.assertEqual(ledger.db.execute("SELECT COUNT(*),SUM(input+output) FROM events WHERE provider='gemini'").fetchone(), (1, 135))
+        ledger.db.close()
+
+    def test_pi_and_omp_copied_branches_preserve_spend(self):
+        entry = {'type': 'message', 'id': 'short-id', 'timestamp': '2026-09-04T12:00:00Z',
+                 'message': {'role': 'assistant', 'model': 'custom', 'provider': 'openrouter',
+                   'usage': {'input': 10, 'output': 20, 'reasoning': 5, 'cacheRead': 30,
+                             'cacheWrite': 5, 'cacheWrite1h': 2, 'cost': {'total': .25}}}}
+        original = self.transcript('pi-original.jsonl', [{'type': 'session', 'id': 's', 'cwd': '/project'}, entry])
+        fork = self.transcript('pi-fork.jsonl', [{'type': 'session', 'id': 'fork', 'cwd': '/project'}, entry])
+        ledger = c.Ledger(self.root / 'pi.sqlite')
+        for source in ['pi', 'omp']:
+            for path in [original, fork]:
+                for r in c.pi_records(path, source): ledger.put(r)
+        self.assertEqual(ledger.db.execute('SELECT COUNT(*),SUM(input+output+cacheRead+cacheWrite) FROM events').fetchone(), (2, 130))
+        ledger.db.row_factory = sqlite3.Row
+        for row in ledger.db.execute('SELECT * FROM events'):
+            self.assertEqual(c.price(dict(row), {}), (.25, None))
+        ledger.db.close()
+
+    def test_opencode_routes_and_logged_cost(self):
+        ledger = c.Ledger(self.root / 'routes.sqlite')
+        for route in ['opencode-go', 'openrouter', 'anthropic']:
+            ledger.put(c.opencode_record(route, 's', '2026-09-04T12:00:00Z', '/project', 'custom', route,
+                                        {'input': 10, 'output': 20, 'reasoning': 5}, .2))
+        cfg = c.DEFAULTS | {'enabled': ['opencode-go', 'opencode']}
+        report = c.report(ledger, cfg, 7, now=dt.datetime(2026, 9, 5).astimezone())
+        self.assertEqual(report['summary']['tokens'], 105)
+        self.assertEqual(report['summary']['unpricedTokens'], 35)
+        self.assertAlmostEqual(report['summary']['value'], .4)
+        filtered = c.report(ledger, cfg, 7, now=dt.datetime(2026, 9, 5).astimezone(), selection={'apiProvider': 'openrouter'})
+        self.assertEqual(filtered['summary']['tokens'], 35)
+        self.assertEqual(len(report['routes']), 3)
+        ledger.db.close()
+
+    def test_expanded_settings_keep_prices_and_home_lists(self):
+        with patch.object(c, 'CONFIG', self.root / 'settings.json'):
+            config = c.save_settings(c.DEFAULTS | {'enabled': list(c.PROVIDERS),
+                'monthlyPrices': {'codex': 200, 'gemini': 20, 'pi': None}, 'ompHomes': ['/mounted/.omp/agent']})
+            self.assertEqual(config['monthlyPrices'], {'codex': 200, 'gemini': 20})
+            self.assertEqual(config['ompHomes'], ['/mounted/.omp/agent'])
+            self.assertEqual(config['enabled'], list(c.PROVIDERS))
+
+    def test_opencode_legacy_and_database_copies_merge(self):
+        root = self.root / 'data/opencode'; root.mkdir(parents=True)
+        item = {'id': 'm1', 'sessionID': 's', 'role': 'assistant', 'providerID': 'openrouter',
+                'modelID': 'custom', 'time': {'created': 1788580000000}, 'path': {'cwd': '/project'},
+                'tokens': {'input': 10, 'output': 20}, 'cost': .25}
+        path = root / 'storage/message/s/m1.json'; path.parent.mkdir(parents=True); path.write_text(json.dumps(item))
+        db = sqlite3.connect(root / 'opencode.db')
+        db.executescript('CREATE TABLE message(id,session_id,time_created,data); CREATE TABLE session(id,directory);')
+        db.execute('INSERT INTO session VALUES (?,?)', ('s', '/project'))
+        db.execute('INSERT INTO message VALUES (?,?,?,?)', ('m1', 's', 1788580000000, json.dumps(item)))
+        db.commit(); db.close()
+        ledger = c.Ledger(self.root / 'legacy.sqlite')
+        with patch.object(c, 'HOME', self.root), patch.dict('os.environ', {
+            'CODEX_HOME': str(self.root / 'codex'), 'CLAUDE_CONFIG_DIR': str(self.root / 'claude'),
+            'GROK_HOME': str(self.root / 'grok'), 'PI_CODING_AGENT_DIR': str(self.root / 'pi'), 'XDG_DATA_HOME': str(self.root / 'data')}):
+            ledger.scan(c.DEFAULTS)
+            ledger.scan(c.DEFAULTS)
+        self.assertEqual(ledger.db.execute('SELECT COUNT(*),SUM(input+output),SUM(reportedValue) FROM events').fetchone(), (1, 30, .25))
+        ledger.db.close()
+
+    def test_gemini_catalog_fills_user_catalog_gaps_without_repricing(self):
+        with patch.object(c, 'STATE', self.root):
+            c.atomic_json(self.root / 'rates.json', {'source': 'custom', 'document': {'custom-model': {'input_cost_per_token': 1}}})
+            catalog = c.load_rates()['document']
+            self.assertEqual(catalog['custom-model']['input_cost_per_token'], 1)
+            record = c.record('g', 'gemini', 's', 1, 'gemini-3.8-flash', '', 'Gemini CLI', input=1000000, output=1000000, cacheRead=1000000)
+            self.assertAlmostEqual(c.price(record, catalog)[0], 4.575)
 
     def test_today_uses_hourly_buckets_without_future_zero_hours(self):
         ledger = c.Ledger(self.root / 'today.sqlite')

@@ -13,26 +13,30 @@ import time
 
 ROOT=Path(__file__).resolve().parent
 parser=argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--view', choices=['overview', 'settings', 'accounts', 'today'], default='overview')
 parser.add_argument('--capture',type=Path,help='render a PNG offscreen and exit')
 args=parser.parse_args()
 with tempfile.TemporaryDirectory(prefix='usage-dashboard-demo-') as tmp:
     base=Path(tmp);env=dict(os.environ)
     env.update(HOME=tmp,XDG_STATE_HOME=str(base/'state'),XDG_CONFIG_HOME=str(base/'config'),
-               XDG_DATA_HOME=str(base/'data'),CODEX_HOME=str(base/'codex'),CLAUDE_CONFIG_DIR=str(base/'claude'),
+               XDG_DATA_HOME=str(base/'data'),CODEX_HOME=str(base/'codex'),CLAUDE_CONFIG_DIR=str(base/'claude'),GROK_HOME=str(base/'grok'),PI_CODING_AGENT_DIR=str(base/'pi'),
                AI_USAGE_ROOT=str(ROOT),AI_USAGE_DEMO='1')
     if args.capture: env.update(QT_QPA_PLATFORM='offscreen',QT_QUICK_BACKEND='software')
     os.environ.update(env)
     spec=importlib.util.spec_from_file_location('demo_collector',ROOT/'collector.py');c=importlib.util.module_from_spec(spec);spec.loader.exec_module(c)
+    c.atomic_json(c.CONFIG, c.DEFAULTS | {'enabled': list(c.PROVIDERS), 'accounts': [{'id':'work','label':'Work','directories':[{'provider':p,'path':str(base/'work'/p)} for p in c.PROVIDERS]}]})
     ledger=c.Ledger(c.STATE/'usage.sqlite');rng=random.Random(7);now=dt.datetime.now().astimezone()
     for offset in range(7):
         date=now.date()-dt.timedelta(days=offset)
-        for provider,model in [('codex','gpt-4.1'),('claude','claude-sonnet-4-20250514'),('opencode-go','glm-5.3-flash')]:
+        for provider,model in [('codex','gpt-4.1'),('claude','claude-sonnet-4-20250514'),('opencode-go','glm-5.3-flash'),('grok','grok-demo'),('gemini','gemini-3.8-flash'),('opencode','example-model'),('pi','example-model'),('omp','example-model')]:
             for index in range(rng.randint(15,50)):
                 when=dt.datetime.combine(date,dt.time()).astimezone()+dt.timedelta(minutes=index*2)
                 if when>now:continue
                 ledger.put(c.record(f'{provider}-{offset}-{index}',provider,f'{provider}-{offset}-{index//8}',when.isoformat(),model,
                     '/demo/'+rng.choice(['website','notes','weather']),'CLI' if provider=='codex' else 'Claude Code' if provider=='claude' else 'OpenCode',
-                    input=rng.randint(500,2000),output=rng.randint(100,1000),cacheRead=rng.randint(10000,100000)))
+                    input=rng.randint(500,2000),output=rng.randint(100,1000),cacheRead=rng.randint(10000,100000)), base/('work' if index % 2 else 'local')/provider/'sessions/demo.jsonl')
+    ledger.db.execute("UPDATE events SET reportedCostTicks=120000000,modelCalls=3 WHERE provider='grok'")
+    ledger.db.execute("UPDATE events SET reportedValue=0.012,apiProvider='example-provider' WHERE provider IN ('opencode','pi','omp')")
     ledger.db.commit();ledger.db.close()
     # Copy QML into an isolated path so IPC cannot target the real dashboard.
     import shutil
@@ -50,6 +54,10 @@ with tempfile.TemporaryDirectory(prefix='usage-dashboard-demo-') as tmp:
             if not output.exists():raise RuntimeError('Timed out rendering demo')
             # Allow the initial report to finish, then capture the populated view.
             time.sleep(1)
+            if args.view != 'overview':
+                command = ['preferences'] if args.view == 'settings' else ['period', '1'] if args.view == 'today' else ['account', 'work']
+                subprocess.run(['quickshell','ipc','-p',str(ui),'--any-display','call','analytics',*command],check=True,env=env)
+                time.sleep(0.8)
             subprocess.run(['quickshell','ipc','-p',str(ui),'--any-display','call','analytics','capture',str(output)],check=True,env=env)
             time.sleep(0.3);print(output)
         else:
@@ -60,3 +68,6 @@ with tempfile.TemporaryDirectory(prefix='usage-dashboard-demo-') as tmp:
         proc.terminate()
         try:proc.wait(timeout=5)
         except subprocess.TimeoutExpired:proc.kill();proc.wait()
+        log = proc.stdout.read()
+        if 'ReferenceError' in log or 'TypeError' in log or 'Unable to assign' in log or 'Failed to load' in log:
+            raise RuntimeError(log)

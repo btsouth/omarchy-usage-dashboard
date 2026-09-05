@@ -15,7 +15,7 @@ url=f'https://raw.githubusercontent.com/BerriAI/litellm/{args.revision}/model_pr
 with urllib.request.urlopen(url,timeout=30) as response:raw=json.load(response)
 models={}
 for name,rate in raw.items():
-    if isinstance(rate,dict) and rate.get('litellm_provider') in ('openai','anthropic'):
+    if isinstance(rate,dict) and rate.get('litellm_provider') in ('openai','anthropic','gemini'):
         fields={k:v for k,v in rate.items() if ('cost_per_token' in k or k.startswith('cache_')) and isinstance(v,(int,float))}
         if fields:models[name]=fields
 if not models:raise SystemExit('No eligible models found; catalog not changed')

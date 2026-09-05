@@ -45,7 +45,27 @@ Scope {
     property bool pending: false
     property var draftEnabled: ["codex", "claude", "opencode-go"]
     property string notice: ""
-    function colorFor(id) { return id === "codex" ? (palette.bright_cyan || "#8cd3cb") : id === "claude" ? (palette.bright_red || "#db9f9c") : (palette.bright_yellow || "#e5c736") }
+    property var providerOptions: data ? data.availableProviders || [] : []
+    property var draftPrices: ({})
+    property var draftHomes: ({})
+    property var draftAccounts: []
+    property string draftLocalLabel: "Local"
+    property string saveError: ""
+    property var homeOptions: [
+        {key:"codexHomes",name:"Codex homes",example:"/mnt/other-computer/.codex"},
+        {key:"claudeHomes",name:"Claude homes",example:"/mnt/other-computer/.claude"},
+        {key:"grokHomes",name:"Grok homes",example:"/mnt/other-computer/.grok"},
+        {key:"geminiHomes",name:"Gemini homes",example:"/mnt/other-computer/.gemini"},
+        {key:"opencodeHomes",name:"OpenCode data folders",example:"/mnt/other-computer/.local/share/opencode"},
+        {key:"piHomes",name:"Pi agent folders",example:"/mnt/other-computer/.pi/agent"},
+        {key:"ompHomes",name:"Oh My Pi agent folders",example:"/mnt/other-computer/.omp/agent"}]
+    function providerName(id) { var p = providerOptions.find(p => p.id === id); return p ? p.name : id }
+    function colorFor(id) {
+        return ({codex: palette.bright_cyan || "#8cd3cb", claude: palette.bright_red || "#db9f9c",
+            "opencode-go": palette.bright_yellow || "#e5c736", grok: palette.bright_blue || "#9cb8db",
+            gemini: palette.bright_magenta || "#c6a0d5", opencode: palette.bright_green || "#a7c080",
+            pi: palette.bright_white || "#d4d4d4", omp: palette.red || "#d88b68"})[id] || root.ink
+    }
     function compact(n) {
         n = Number(n || 0)
         return n >= 1e9 ? (n/1e9).toFixed(2)+"B" : n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1e3 ? (n/1e3).toFixed(1)+"K" : String(Math.round(n))
@@ -79,26 +99,28 @@ Scope {
         notice = ""
         var s = data ? data.settings : {}
         draftEnabled = (s.enabled || ["codex", "claude", "opencode-go"]).slice()
-        codexPrice.text = s.monthlyPrices && s.monthlyPrices.codex !== undefined ? String(s.monthlyPrices.codex) : ""
-        claudePrice.text = s.monthlyPrices && s.monthlyPrices.claude !== undefined ? String(s.monthlyPrices.claude) : ""
-        goPrice.text = s.monthlyPrices && s.monthlyPrices["opencode-go"] !== undefined ? String(s.monthlyPrices["opencode-go"]) : ""
-        codexHomes.text = (s.codexHomes || []).join("\n")
-        claudeHomes.text = (s.claudeHomes || []).join("\n")
+        var prices = {}, homes = {}
+        providerOptions.forEach(p => prices[p.id] = s.monthlyPrices && s.monthlyPrices[p.id] !== undefined ? String(s.monthlyPrices[p.id]) : "")
+        homeOptions.forEach(h => homes[h.key] = (s[h.key] || []).join("\n"))
+        draftPrices = prices
+        draftHomes = homes
+        draftAccounts = JSON.parse(JSON.stringify(s.accounts || []))
+        draftLocalLabel = s.localAccountLabel || "Local"
         opacitySlider.value = s.windowOpacity || 0.985
         settingsOpen = true
     }
     function saveSettings() {
         var prices = {}
-        var fields = {codex: codexPrice.text, claude: claudePrice.text, "opencode-go": goPrice.text}
+        var fields = draftPrices
         for (var p in fields) {
             if (fields[p].trim() === "") continue
             var n = Number(fields[p])
             if (!isFinite(n) || n < 0 || n > 100000) { notice = "Enter a valid monthly price, or leave it blank."; return }
             prices[p] = n
         }
-        var s = {enabled: draftEnabled, monthlyPrices: prices, windowOpacity: opacitySlider.value,
-            codexHomes: codexHomes.text.split("\n").filter(x => x.trim()).map(x => x.trim()),
-            claudeHomes: claudeHomes.text.split("\n").filter(x => x.trim()).map(x => x.trim())}
+        saveError = ""
+        var s = {accounts: draftAccounts, localAccountLabel: draftLocalLabel, enabled: draftEnabled, monthlyPrices: prices, windowOpacity: opacitySlider.value}
+        homeOptions.forEach(h => s[h.key] = (draftHomes[h.key] || "").split("\n").filter(x => x.trim()).map(x => x.trim()))
         save.command = ["python3", helper, "settings", "--save", JSON.stringify(s)]
         save.running = true
     }
@@ -115,14 +137,15 @@ Scope {
     }
     Process {
         id: save
+        stdout: StdioCollector { onStreamFinished: { try { root.saveError = JSON.parse(text).error || "" } catch(e) {} } }
         onExited: function(code) {
             if (code === 0) { root.settingsOpen = false; root.selection = ({}); root.navigation = []; root.provider = "all"; root.notice = "Settings saved"; root.refresh() }
-            else root.notice = "Settings could not be saved."
+            else root.notice = root.saveError || "Settings could not be saved."
         }
     }
     Process {
         id: live
-        command: Quickshell.env("AI_USAGE_DEMO") === "1" ? ["python3", helper, "report"] : ["bash", helper.replace(/collector\.py$/, "refresh.sh")]
+        command: Quickshell.env("AI_USAGE_DEMO") === "1" ? ["python3", helper, "report"] : ["bash", helper.replace(/collector\.py$/, "refresh.sh"), "--force"]
         onExited: root.refresh()
     }
     Timer { interval: 300000; repeat: true; running: window.visible; onTriggered: root.refresh() }
@@ -139,9 +162,11 @@ Scope {
     IpcHandler {
         target: "analytics"
         function quit(): void { Qt.quit() }
-        function show(): void { window.visible = true; root.refresh() }
+        function refresh(): void { root.refreshLive() }
+        function showWindow(): void { window.visible = true; root.refresh() }
         function capture(path: string): void { captureRoot.grabToImage(result => result.saveToFile(path)) }
         function captureTooltip(path: string): void { chartTip.contentItem.grabToImage(result => result.saveToFile(path)) }
+        function account(id: string): void { root.drill("account", id, "") }
         function preferences(): void { root.openSettings() }
         function overview(): void { root.settingsOpen = false }
         function period(days: int): void { root.days = days; root.refresh() }
@@ -268,9 +293,10 @@ Scope {
                     Label { anchors.centerIn: parent; text: "󱚣"; color: root.ink; font.pixelSize: 24 }
                 }
                 Column {
+                    Layout.fillWidth: true; Layout.minimumWidth: 150
                     spacing: 3
                     Label { text: root.settingsOpen ? "Preferences" : "AI usage"; font.pixelSize: 21; font.weight: Font.Medium }
-                    Sub { text: Quickshell.env("AI_USAGE_DEMO") === "1" ? "Demo data · no local history" : "Codex · Claude · OpenCode Go" }
+                    Sub { width: parent.width; elide: Text.ElideRight; text: Quickshell.env("AI_USAGE_DEMO") === "1" ? "Demo data · no local history" : (root.data ? root.data.settings.enabled.map(p => root.providerName(p)).join(" · ") : "Local AI usage") }
                 }
                 Item { Layout.fillWidth: true }
                 Sub { text: scan.running || live.running ? "Updating usage…" : root.data ? root.data.period.start + "  to  " + root.data.period.end : "Loading…" }
@@ -285,20 +311,29 @@ Scope {
                 visible: !root.settingsOpen
                 Layout.fillWidth: true
                 spacing: 6
-                Repeater {
-                    model: [{id: "all", name: "Overview"}].concat(root.data ? root.data.settings.enabled.map(p => ({id:p,name:p === "codex" ? "Codex" : p === "claude" ? "Claude" : "OpenCode Go"})) : [])
-                    Choice { required property var modelData; text: modelData.name; selected: root.provider === modelData.id; onClicked: { root.provider = modelData.id; root.refresh() } }
+                Flow {
+                    Layout.fillWidth: true; spacing: 6
+                    Repeater {
+                        model: [{id: "all", name: "Overview"}].concat(root.data ? root.data.settings.enabled.map(p => ({id:p,name:root.providerName(p)})) : [])
+                        Choice { required property var modelData; text: modelData.name; selected: root.provider === modelData.id; onClicked: { root.provider = modelData.id; root.refresh() } }
+                    }
                 }
-                Item { Layout.fillWidth: true }
                 Repeater {
                     model: [1,7,30,90,365]
-                    Choice { required property int modelData; text: modelData === 1 ? "Today" : modelData === 365 ? "Year" : modelData + "d"; selected: root.days === modelData; onClicked: { root.days = modelData; root.navigation = []; root.selection = ({}); root.refresh() } }
+                    Choice { required property int modelData; text: modelData === 1 ? "Today" : modelData === 365 ? "Year" : modelData + "d"; selected: root.days === modelData; onClicked: { root.days = modelData; root.navigation = []; root.selection = root.selection.account ? {account:root.selection.account} : ({}); root.refresh() } }
                 }
             }
+            Flow { Layout.fillWidth: true; spacing: 8; visible: !root.settingsOpen && !!root.data
+                Choice { text: "All accounts"; selected: !root.selection.account; onClicked: { var s=Object.assign({},root.selection); delete s.account; root.selection=s; root.refresh() } }
+                Repeater { model: root.data ? root.data.accountOptions : []
+                    Choice { required property var modelData; text: modelData.label; selected: root.selection.account===modelData.id; onClicked: root.drill("account",modelData.id,"") }
+                }
+            }
+            Sub { Layout.fillWidth: true; visible: !root.settingsOpen && !!root.data && !!root.data.accountWarning; text: root.data ? root.data.accountWarning : ""; wrapMode: Text.WordWrap }
             RowLayout {
                 visible: !root.settingsOpen && Object.keys(root.selection).length > 0
                 Layout.fillWidth: true
-                Label { Layout.fillWidth: true; elide: Text.ElideMiddle; text: Object.keys(root.selection).map(k => k+": "+root.selection[k]).join(" · ") }
+                Label { Layout.fillWidth: true; elide: Text.ElideMiddle; text: Object.keys(root.selection).map(k => k+": "+(k === "account" ? (root.data.accountOptions.find(a=>a.id===root.selection[k]) || {}).label || root.selection[k] : root.selection[k])).join(" · ") }
                 Choice { visible: root.navigation.length > 0; text: "Back"; onClicked: root.goBack() }
                 Choice { text: "Clear filters"; onClicked: root.clearSelection() }
             }
@@ -319,7 +354,7 @@ Scope {
                         Column {
                             id: pricingNote
                             anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 14; spacing: 6
-                            Label { width: parent.width; wrapMode: Text.WordWrap; text: root.data ? (root.data.summary.tokens === 0 ? "No activity in this period. Add a history folder in Settings or use a supported coding agent." : root.data.summary.unpricedTokens ? root.compact(root.data.summary.unpricedTokens)+" tokens have no complete price. API value is a partial estimate." : "All recorded tokens in this view have catalog pricing.") : "Checking pricing coverage…"; color: root.data && root.data.summary.unpricedTokens ? root.colorFor("claude") : root.ink }
+                            Label { width: parent.width; wrapMode: Text.WordWrap; text: root.data ? (root.data.summary.tokens === 0 ? "No activity in this period. Add a history folder in Settings or use a supported coding agent." : root.data.summary.unpricedTokens ? root.compact(root.data.summary.unpricedTokens)+" tokens have no complete price. API value is a partial estimate." : "All recorded tokens in this view have an API-value estimate.") : "Checking pricing coverage…"; color: root.data && root.data.summary.unpricedTokens ? root.colorFor("claude") : root.ink }
                             Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.data ? "History on "+(root.data.coverage.machine || "this computer")+" · scanned "+root.when(root.data.coverage.scannedAt)+" · "+(root.data.pricing.coveragePercent===null ? "No activity" : (root.data.summary.unpricedTokens && root.data.pricing.coveragePercent>99.9 ? ">99.9" : root.data.pricing.coveragePercent.toFixed(1))+"% of tokens priced") : "" }
                         }
                     }
@@ -331,7 +366,7 @@ Scope {
                                 anchors.fill: parent; anchors.margins: 22; spacing: 12
                                 Sub { text: root.metric === "tokens" ? "PROCESSED TOKENS" : "ESTIMATED API VALUE"; font.letterSpacing: 1.2 }
                                 Label { text: root.data ? root.display(root.data.summary) : "…"; font.pixelSize: 36; font.weight: Font.Medium }
-                                Sub { text: root.data ? root.data.summary.sessions + " sessions · " + root.compact(root.data.summary.requests) + " requests" + (root.metric === "value" && root.data.summary.unpricedTokens ? " · partial value" : "") : "Scanning local history" }
+                                Sub { text: root.data ? root.data.summary.sessions + " sessions · " + root.compact(root.data.summary.requests) + " usage records" + (root.metric === "value" && root.data.summary.unpricedTokens ? " · partial value" : "") : "Scanning local history" }
                                 Rectangle { width: parent.width; height: 1; color: root.edge }
                                 Label {
                                     text: {
@@ -345,7 +380,7 @@ Scope {
                                 }
                                 Label { width: parent.width; wrapMode: Text.WordWrap; text: root.data && root.data.summary.tokens ? (root.data.summary.cacheRead/root.data.summary.tokens*100).toFixed(1)+"% cached input reused" : "No recorded tokens"; color: root.colorFor("codex") }
                                 Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.data ? root.compact(root.data.summary.output)+" output tokens, including reasoning" : "" }
-                                Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.metric === "tokens" ? "Processed tokens count reused context on every request. This is not a count of unique text." : "At catalog API rates, not your bill. Tool charges and service-tier premiums are excluded." }
+                                Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.metric === "tokens" ? "Processed tokens count reused context on every request. This is not a count of unique text." : "Catalog rates or the app’s recorded API estimate. This is not your bill." }
                             }
                         }
                         Card {
@@ -411,7 +446,7 @@ Scope {
                                                 }
                                                 ctx.strokeStyle=root.colorFor(pid);ctx.lineWidth=2.3;ctx.stroke()
                                                 if(series.length===1){ctx.beginPath();ctx.arc(x,yy,4,0,2*Math.PI);ctx.fillStyle=root.colorFor(pid);ctx.fill()}
-                                                else {ctx.lineTo(left+plot,bottom);ctx.lineTo(left,bottom);ctx.closePath();ctx.fillStyle=Qt.alpha(root.colorFor(pid),0.07);ctx.fill()}
+                                                else if(ids.length <= 3) {ctx.lineTo(left+plot,bottom);ctx.lineTo(left,bottom);ctx.closePath();ctx.fillStyle=Qt.alpha(root.colorFor(pid),0.07);ctx.fill()}
                                             }
                                             ctx.fillStyle=root.muted
                                             if(series.length){ctx.fillText(series[0].date.slice(5),left,h-5);ctx.fillText(series[series.length-1].date.slice(5),w-42,h-5)}
@@ -434,14 +469,14 @@ Scope {
                                         y: 16
                                         heading: chart.hovered>=0 && chart.hovered<chart.series.length ? (chart.hourly ? chart.series[chart.hovered].title : Qt.formatDate(new Date(chart.series[chart.hovered].date+"T12:00:00"),"dddd, MMM d")) : ""
                                         rows: chart.hovered>=0 && chart.hovered<chart.series.length && root.data ? root.data.providers.map(p=>({label:p.name,value:root.display(chart.series[chart.hovered].providers[p.id]),color:root.colorFor(p.id)})) : []
-                                        detail: (chart.hourly ? "This hour · " : "") + (root.metric === "tokens" ? "Processed tokens, including cached input" : "Estimated API value at catalog rates")
+                                        detail: (chart.hourly ? "This hour · " : "") + (root.metric === "tokens" ? "Processed tokens, including cached input" : "Estimated API value, not your bill")
                                     }
                                 }
                             }
                         }
                     }
                     GridLayout {
-                        width: parent.width; columns: root.data ? Math.max(1,root.data.providers.length) : 3; columnSpacing: 14
+                        width: parent.width; columns: root.data ? (root.data.providers.length > 3 ? 2 : Math.max(1,root.data.providers.length)) : 3; rowSpacing: 14; columnSpacing: 14
                         Repeater {
                             model: root.data ? root.data.providers : []
                             Card {
@@ -464,6 +499,8 @@ Scope {
                                         Sub { text: "tokens"; anchors.bottom: parent.bottom; anchors.bottomMargin: 3 }
                                     }
                                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.valueText(modelData) + " API value · " + modelData.sessions + " sessions" }
+                                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: modelData.valueShare === null ? "No priced API value" : modelData.valueShare.toFixed(1)+"% of priced API value" }
+                                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: modelData.sessions ? root.compact(modelData.tokensPerSession)+" tokens · "+root.money(modelData.valuePerSession)+" priced value / recorded session" : "No recorded sessions" }
                                     Rectangle { width: parent.width; height: 3; radius: 2; color: root.edge
                                         Rectangle { width: parent.width*(root.data.summary.tokens ? modelData.tokens/root.data.summary.tokens : 0); height: 3; radius: 2; color: root.colorFor(modelData.id) }
                                     }
@@ -471,6 +508,8 @@ Scope {
                                         width: parent.width; wrapMode: Text.WordWrap
                                         text: modelData.monthlyPrice !== null ? root.money(modelData.monthlyPrice)+"/month plan · "+(modelData.monthlyPrice>0?(modelData.value/modelData.monthlyPrice).toFixed(1)+"× plan price in this period":"no plan charge") : "Monthly plan price not set"
                                     }
+                                    Sub { visible: modelData.id === "grok"; width: parent.width; wrapMode: Text.WordWrap; text: root.compact(modelData.modelCalls || 0)+" model calls · "+modelData.requests+" usage records" }
+                                    Sub { visible: !root.selection.account; text: modelData.quotaScope }
                                     Repeater {
                                         model: modelData.quota.limits || []
                                         Column {
@@ -497,7 +536,7 @@ Scope {
                         RowLayout {
                             anchors.fill: parent; anchors.margins: 20; spacing: 15
                             Repeater {
-                                model: [{name:"Uncached input",key:"input"},{name:"Cached input",key:"cacheRead"},{name:"Cache writes",key:"cacheWrite"},{name:"Output",key:"output"},{name:"Cache read savings",key:"cacheSavings"}]
+                                model: [{name:"Uncached input",key:"input"},{name:"Cached input",key:"cacheRead"},{name:"Cache writes",key:"cacheWrite"},{name:"Output",key:"output"},{name:"Known cache savings",key:"cacheSavings"}]
                                 Column {
                                     required property var modelData
                                     Layout.fillWidth: true; spacing: 8
@@ -514,14 +553,14 @@ Scope {
                             anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 18; spacing: 10
                             RowLayout {
                                 width: parent.width
-                                Label { text: "Usage breakdown"; font.pixelSize: 16; font.weight: Font.DemiBold }
+                                Label { text: "Breakdown"; font.pixelSize: 16; font.weight: Font.DemiBold }
                                 Item { Layout.fillWidth: true }
-                                Repeater { model: ["models","projects","clients","sessions"]
+                                Repeater { model: ["models","projects","clients","routes","accounts","sessions"]
                                     Choice { required property string modelData; text: modelData[0].toUpperCase()+modelData.slice(1); selected: root.breakdown===modelData; onClicked: { root.breakdown=modelData; root.tableLimit=20 } }
                                 }
                             }
                             RowLayout { width: parent.width
-                                Sub { text: root.breakdown === "models" ? "MODEL" : root.breakdown === "projects" ? "PROJECT" : root.breakdown === "sessions" ? "SESSION / PROJECT" : "CLIENT"; Layout.fillWidth: true }
+                                Sub { text: root.breakdown === "models" ? "MODEL" : root.breakdown === "projects" ? "PROJECT" : root.breakdown === "sessions" ? "SESSION / PROJECT" : root.breakdown === "routes" ? "SOURCE ROUTE" : root.breakdown === "accounts" ? "ACCOUNT" : "CLIENT"; Layout.fillWidth: true }
                                 Sub { text: "TOKENS"; Layout.preferredWidth: 95; horizontalAlignment: Text.AlignRight }
                                 Sub { text: "API VALUE"; Layout.preferredWidth: 150; horizontalAlignment: Text.AlignRight }
                                 Sub { text: "CACHE READ"; Layout.preferredWidth: 95; horizontalAlignment: Text.AlignRight }
@@ -543,21 +582,21 @@ Scope {
                                             color: activeFocus ? root.bright : root.ink
                                             Accessible.role: Accessible.Button
                                             Accessible.name: "Explore "+modelData.name
-                                            Keys.onReturnPressed: { if (root.breakdown !== "sessions") root.drill(root.breakdown === "models" ? "model" : root.breakdown === "projects" ? "project" : "client", modelData.name, modelData.provider) }
+                                            Keys.onReturnPressed: { if (root.breakdown !== "sessions") root.drill(root.breakdown === "models" ? "model" : root.breakdown === "projects" ? "project" : root.breakdown === "routes" ? "apiProvider" : root.breakdown === "accounts" ? "account" : "client", root.breakdown === "accounts" ? modelData.accountId : modelData.name, modelData.provider) }
                                             text: root.breakdown === "sessions" ? (modelData.project.split("/").filter(x=>x).pop() || "/")+" · "+modelData.name.slice(0,12)+"\n"+modelData.client+" · "+root.when(modelData.lastAt) : root.breakdown === "projects" ? modelData.name.split('/').filter(x=>x).pop() || "/" : modelData.name
                                             HoverTip {
                                                 parent: modelLabel
                                                 visible: rowHover.hovered
                                                 y: parent.height+10
                                                 heading: root.breakdown === "sessions" ? modelData.project+"\n"+modelData.name : modelData.name
-                                                detail: modelData.sessions+" sessions · "+root.compact(modelData.requests)+" requests"
+                                                detail: modelData.sessions+" sessions · "+root.compact(modelData.requests)+" usage records"
                                                 rows: [{label:"Uncached input",value:root.compact(modelData.input)},
                                                        {label:"Cached input",value:root.compact(modelData.cacheRead)},
                                                        {label:"Cache writes",value:root.compact(modelData.cacheWrite)},
                                                        {label:"Output",value:root.compact(modelData.output)}]
                                             }
                                             HoverHandler { id: rowHover; cursorShape: root.breakdown === "sessions" ? Qt.ArrowCursor : Qt.PointingHandCursor }
-                                            TapHandler { onTapped: { if (root.breakdown !== "sessions") root.drill(root.breakdown === "models" ? "model" : root.breakdown === "projects" ? "project" : "client", modelData.name, modelData.provider) } }
+                                            TapHandler { onTapped: { if (root.breakdown !== "sessions") root.drill(root.breakdown === "models" ? "model" : root.breakdown === "projects" ? "project" : root.breakdown === "routes" ? "apiProvider" : root.breakdown === "accounts" ? "account" : "client", root.breakdown === "accounts" ? modelData.accountId : modelData.name, modelData.provider) } }
                                         }
                                         Label { text: root.compact(modelData.tokens); Layout.preferredWidth: 95; horizontalAlignment: Text.AlignRight }
                                         Label { text: root.valueText(modelData); Layout.preferredWidth: 150; horizontalAlignment: Text.AlignRight; color: modelData.unpricedTokens ? root.colorFor("claude") : root.ink }
@@ -566,7 +605,7 @@ Scope {
                                 }
                             }
                             Choice { visible: !!root.data && (root.data[root.breakdown] || []).length > root.tableLimit; text: "Show 20 more"; onClicked: root.tableLimit += 20 }
-                            Sub { text: root.breakdown === "sessions" ? "Session totals within this view. No conversation content is stored." : "Select a name to explore its projects, models, and sessions." }
+                            Sub { width: parent.width; wrapMode: Text.WordWrap; text: "A recorded session is not a completed task. Averages cover this period; priced value excludes unknown prices." }
                             Sub { visible: !!root.data && !(root.data[root.breakdown] || []).length; text: "No recorded activity in this period." }
                         }
                     }
@@ -645,6 +684,7 @@ Scope {
                                 Sub { required property var modelData; width: coverageColumn.width; wrapMode: Text.WordWrap; text: modelData.provider+" / "+modelData.client+" · "+modelData.sessions+" sessions · latest event "+root.when(modelData.lastAt) }
                             }
                             Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.data ? "Pricing: "+root.data.pricing.source+(root.data.pricing.fetchedAtMs?" · "+Qt.formatDateTime(new Date(root.data.pricing.fetchedAtMs),"MMM d, yyyy"):"")+". Estimates use this catalog's rates, not historical billing rates." : "" }
+                            Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Grok, OpenCode, Pi, and Oh My Pi use recorded API estimates when available. Their recorded totals do not provide cache savings. Usage records are message snapshots or completed Grok turns, not equivalent request counts. Turns without detailed usage are excluded." }
                             Repeater {
                                 model: root.data ? root.data.pricing.unpriced || [] : []
                                 Sub { required property var modelData; width: coverageColumn.width; wrapMode: Text.WordWrap; text: modelData.provider+" / "+modelData.name+": "+root.compact(modelData.unpricedTokens)+" unpriced tokens" }
@@ -667,12 +707,12 @@ Scope {
                     Label { text: "Make it yours"; font.pixelSize: 24; font.weight: Font.DemiBold }
                     Sub { text: "Analytics preferences stay on this machine. Credentials remain in their existing apps." }
                     Label { text: "Visible providers"; font.pixelSize: 16 }
-                    Row { spacing: 10
-                        Repeater { model: ["codex","claude","opencode-go"]
+                    Flow { width: parent.width; spacing: 10
+                        Repeater { model: root.providerOptions
                             Choice {
-                                required property string modelData
-                                text: modelData === "codex" ? "Codex" : modelData === "claude" ? "Claude" : "OpenCode Go"; selected: root.draftEnabled.indexOf(modelData)>=0
-                                onClicked: { var a=root.draftEnabled.slice();var i=a.indexOf(modelData);if(i>=0)a.splice(i,1);else a.push(modelData);root.draftEnabled=a }
+                                required property var modelData
+                                text: modelData.name; selected: root.draftEnabled.indexOf(modelData.id)>=0
+                                onClicked: { var a=root.draftEnabled.slice();var i=a.indexOf(modelData.id);if(i>=0)a.splice(i,1);else a.push(modelData.id);root.draftEnabled=a }
                             }
                         }
                     }
@@ -698,17 +738,64 @@ Scope {
                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Drag to preview. Save preferences to keep it. At 100%, the background is fully opaque." }
                     Label { text: "Monthly subscription prices · USD"; font.pixelSize: 16 }
                     Sub { text: "Optional. API value is compared with this price; it is not an invoice or a billing-cycle calculation." }
-                    Row { spacing: 14
-                        Column { spacing: 6; Sub { text: "Codex" } Field { id: codexPrice; width: 170; placeholderText: "Not set"; Accessible.name: "Codex monthly price" } }
-                        Column { spacing: 6; Sub { text: "Claude" } Field { id: claudePrice; width: 170; placeholderText: "Not set"; Accessible.name: "Claude monthly price" } }
-                        Column { spacing: 6; Sub { text: "OpenCode Go" } Field { id: goPrice; width: 170; placeholderText: "Not set"; Accessible.name: "OpenCode Go monthly price" } }
+                    Flow { width: parent.width; spacing: 14
+                        Repeater { model: root.providerOptions.filter(p => root.draftEnabled.indexOf(p.id)>=0)
+                            Column {
+                                required property var modelData
+                                spacing: 6
+                                Sub { text: modelData.name }
+                                Field { width: 170; placeholderText: "Not set"; Accessible.name: modelData.name+" monthly price"
+                                    text: root.draftPrices[modelData.id] || ""
+                                    onTextEdited: root.draftPrices[modelData.id] = text
+                                }
+                            }
+                        }
                     }
-                    Label { text: "Additional history folders"; font.pixelSize: 16 }
+                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Grok quota uses its existing login. If it expires, run grok login. The dashboard never changes credentials." }
+                    Label { text: "History accounts"; font.pixelSize: 16 }
+                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Label agent home folders by account. Keep mirrored folders under the same account. Labels do not switch logins; quota is only for the current login on this PC." }
+                    Field { width: 260; text: root.draftLocalLabel; placeholderText: "Local account name"; onTextEdited: root.draftLocalLabel = text; Accessible.name: "Local account name" }
+                    Repeater { model: root.draftAccounts
+                        Column {
+                            id: accountEditor
+                            required property var modelData
+                            required property int index
+                            width: parent.width; spacing: 10
+                            RowLayout { width: parent.width
+                                Field { Layout.fillWidth: true; text: accountEditor.modelData.label; placeholderText: "Account name, e.g. Work"; onTextEdited: root.draftAccounts[accountEditor.index].label = text }
+                                Choice { text: "Remove account"; onClicked: { var a=root.draftAccounts.slice(); a.splice(accountEditor.index,1); root.draftAccounts=a } }
+                            }
+                            Repeater { model: accountEditor.modelData.directories
+                                RowLayout {
+                                    required property var modelData
+                                    required property int index
+                                    width: accountEditor.width
+                                    ComboBox { Layout.preferredWidth: 170; model: root.providerOptions; textRole: "name"; valueRole: "id"; currentIndex: root.providerOptions.findIndex(p=>p.id===modelData.provider)
+                                        font.family: root.fontFamily; font.pixelSize: 12; implicitHeight: 42; palette.button: root.base; palette.buttonText: root.ink; palette.window: root.base; palette.text: root.ink; palette.highlight: root.accent
+                                        onActivated: root.draftAccounts[accountEditor.index].directories[index].provider = currentValue
+                                    }
+                                    Field { Layout.fillWidth: true; text: modelData.path; placeholderText: "Full agent home folder, e.g. /mnt/work/.codex"; onTextEdited: root.draftAccounts[accountEditor.index].directories[index].path = text }
+                                    Choice { text: "Remove"; onClicked: { root.draftAccounts[accountEditor.index].directories.splice(index,1); root.draftAccounts=JSON.parse(JSON.stringify(root.draftAccounts)) } }
+                                }
+                            }
+                            Choice { text: "Add folder"; onClicked: { root.draftAccounts[accountEditor.index].directories.push({provider:"codex",path:""}); root.draftAccounts=JSON.parse(JSON.stringify(root.draftAccounts)) } }
+                            Rectangle { width: parent.width; height: 1; color: root.edge }
+                        }
+                    }
+                    Choice { text: "Add account"; onClicked: { root.draftAccounts=root.draftAccounts.concat([{id:"account-"+Date.now()+"-"+Math.random().toString(36).slice(2,8),label:"",directories:[{provider:"codex",path:""}]}]) } }
+                    Label { text: "Unlabelled additional history folders"; font.pixelSize: 16 }
                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: "One full home-folder path per line, such as /mnt/other-computer/.codex. Use folders you have already mounted or synced. No remote connection is made. Copies with stable session IDs are deduplicated." }
-                    Sub { text: "Additional Codex homes" }
-                    Homes { id: codexHomes; width: parent.width; height: 85; placeholderText: "/mnt/other-computer/.codex"; Accessible.name: "Additional Codex homes" }
-                    Sub { text: "Additional Claude homes" }
-                    Homes { id: claudeHomes; width: parent.width; height: 85; placeholderText: "/mnt/other-computer/.claude"; Accessible.name: "Additional Claude homes" }
+                    Repeater { model: root.homeOptions.filter(h => root.draftEnabled.indexOf(h.key.replace(/Homes$/, ""))>=0 || (h.key === "opencodeHomes" && root.draftEnabled.indexOf("opencode-go")>=0))
+                        Column {
+                            required property var modelData
+                            width: parent.width; spacing: 6
+                            Sub { text: modelData.name }
+                            Homes { width: parent.width; height: 70; placeholderText: modelData.example; Accessible.name: modelData.name
+                                text: root.draftHomes[modelData.key] || ""
+                                onTextChanged: root.draftHomes[modelData.key] = text
+                            }
+                        }
+                    }
                     Card {
                         width: parent.width; height: 88
                         Column { anchors.fill: parent; anchors.margins: 16; spacing: 8

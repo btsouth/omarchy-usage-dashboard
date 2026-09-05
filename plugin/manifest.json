@@ -32,6 +32,21 @@
         },
         "opencode-go": {
           "enabled": true
+        },
+        "grok": {
+          "enabled": true
+        },
+        "gemini": {
+          "enabled": true
+        },
+        "opencode": {
+          "enabled": true
+        },
+        "pi": {
+          "enabled": true
+        },
+        "omp": {
+          "enabled": true
         }
       },
       "refreshIntervalSec": 900,
