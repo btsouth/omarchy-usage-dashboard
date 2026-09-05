@@ -61,10 +61,21 @@ Scope {
         {key:"ompHomes",name:"Oh My Pi agent folders",example:"/mnt/other-computer/.omp/agent"}]
     function providerName(id) { var p = providerOptions.find(p => p.id === id); return p ? p.name : id }
     function colorFor(id) {
-        return ({codex: palette.bright_cyan || "#8cd3cb", claude: palette.bright_red || "#db9f9c",
+        var raw = ({codex: palette.bright_cyan || "#8cd3cb", claude: palette.bright_red || "#db9f9c",
             "opencode-go": palette.bright_yellow || "#e5c736", grok: palette.bright_blue || "#9cb8db",
             gemini: palette.bright_magenta || "#c6a0d5", opencode: palette.bright_green || "#a7c080",
             pi: palette.bright_white || "#d4d4d4", omp: palette.red || "#d88b68"})[id] || root.ink
+        function luminance(c) {
+            function linear(v) { return v <= 0.04045 ? v/12.92 : Math.pow((v+0.055)/1.055,2.4) }
+            return 0.2126*linear(c.r)+0.7152*linear(c.g)+0.0722*linear(c.b)
+        }
+        var color=Qt.darker(raw,1), background=luminance(root.base)
+        for (var i=0;i<16;i++) {
+            var value=luminance(color)
+            if ((Math.max(value,background)+0.05)/(Math.min(value,background)+0.05)>=4.5) break
+            color=background>0.179 ? Qt.darker(color,1.15) : Qt.lighter(color,1.15)
+        }
+        return color
     }
     function compact(n) {
         n = Number(n || 0)

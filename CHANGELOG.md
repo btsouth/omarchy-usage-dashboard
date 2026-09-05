@@ -10,6 +10,7 @@
 - Detect active sources on first use and adapt layouts to the enabled providers.
 - Refresh Grok quota after login and request fresh limits on manual Refresh.
 - Fix reopening an existing dashboard window.
+- Keep provider colors readable on light and dark backgrounds.
 
 ## Initial package
 
