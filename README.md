@@ -1,121 +1,118 @@
 # AI Usage Dashboard for Omarchy
 
-Compare Codex, Claude Code, Grok Build, Gemini CLI, OpenCode, Pi, and Oh My Pi usage from your desktop. Token history, usage limits, model and project breakdowns, and estimated API value in a native Omarchy dashboard.
+Token trends, account comparisons, usage limits, and estimated API value for AI coding agents. Includes a bar widget that opens the full dashboard.
 
 ![Dashboard with generated example data](docs/dashboard.png)
 
-*Screenshot uses generated demo data.*
-
-## Features
-
-- Today, 7-day, 30-day, 90-day, and yearly views.
-- Daily trends and hourly detail for a selected day.
-- Input, output, and cache totals, with cached share beside the headline.
-- Model, project, client, source-route, and session drilldowns.
-- Named accounts with multiple history folders, account filters, and deduplication.
-- Estimated API value, source shares, and averages per recorded session, with missing prices clearly marked.
-- Source coverage, available subscription limits, and Omarchy theme colors.
+*Screenshot uses demo data.*
 
 ## Install
 
-Requires **Omarchy 4 with its Quickshell shell**, Python 3.11+, and a systemd user session. No Python packages to install. Older Waybar-based Omarchy versions are not supported.
+Requires Omarchy 4 with Quickshell, Python 3.11+, and a systemd user session. Older Waybar-based versions are not supported.
 
 ```sh
 git clone https://github.com/btsouth/omarchy-usage-dashboard.git
 cd omarchy-usage-dashboard
 python3 install.py --with-plugin
-~/.local/bin/omarchy-usage-dashboard
 ```
 
-The installer adds a separate bar widget and application launcher. Existing widgets and settings stay in place. If the widget does not appear, run:
+Open the new bar widget and click **Open analytics**, or search for **AI Usage Dashboard** in your application menu. Both open the same dashboard.
+
+### Using it instead of the built-in widget
+
+The installer adds **AI Usage Dashboard** alongside Omarchy's built-in **Agents** widget. It does not automatically replace it.
+
+For a single AI icon, remove the old Agents widget from your bar layout after installing. Keep the new AI Usage Dashboard widget. Omarchy's packaged files are unchanged, and you can add the original widget back later.
+
+If the new widget does not appear, run:
 
 ```sh
 omarchy-shell shell rescanPlugins
 ```
 
-The bar icon appears once usage is available. The application launcher works with an empty history. The first scan can take longer for large histories.
+The icon appears once recorded usage is available. You can open the dashboard from the application menu at any time. Large histories may take longer on the first scan.
 
-Omit `--with-plugin` to install only the dashboard and background collector. The app is copied into your user data directory, so it keeps working if you move or delete the checkout. No sudo or changes to packaged Omarchy files are needed.
+### Dashboard without a bar widget
 
-## Update or uninstall
+Use `python3 install.py` without `--with-plugin`. Open it from the application menu or run:
 
-From the checkout:
+```sh
+~/.local/bin/omarchy-usage-dashboard
+```
+
+Both install options run without sudo and keep working if you move or delete the checkout. See [installation details](docs/installation.md) for file locations.
+
+## Features
+
+- Today, 7-day, 30-day, 90-day, and yearly trends, with hourly detail.
+- Input, output, and cache totals, estimated API value, and provider comparisons.
+- Breakdowns by model, project, client, model provider, account, and session.
+- Named accounts with multiple history folders and deduplication of copied records.
+- Available usage limits, optional monthly plan comparisons, and Omarchy theme colors.
+
+## Supported sources
+
+| Source | Token history | Usage limits |
+| --- | --- | --- |
+| Codex | CLI and Codex desktop, including archives | From Omarchy |
+| Claude Code | Project transcripts | From Omarchy |
+| Grok Build | Completed turns and model calls | From the existing Grok login |
+| Gemini CLI | Sessions and subagents | When an Omarchy snapshot is available |
+| OpenCode Go | Requests through `opencode-go` | From the existing OpenCode connection |
+| OpenCode | Other model providers used through OpenCode | Not collected |
+| Pi / Oh My Pi | Saved assistant usage | Not collected |
+
+Sources with recorded history appear automatically on a fresh install. Use **Settings** to choose which ones to show. OpenCode Go uses your existing API key; no cookie setup is needed. If Grok authentication expires, run `grok login`.
+
+Normal ChatGPT, Grok web, and Gemini web conversations are not included. Cursor, Copilot, Windsurf, and Antigravity are not supported. See [provider coverage](docs/provider-coverage.md) for formats and validation limits.
+
+## Multiple accounts
+
+Under **Settings → History accounts**, add a name and one or more agent home folders, such as `/mnt/work/.codex` and `/mnt/work/.claude`. Filter by account or use the Accounts breakdown to compare them.
+
+Folders must already be available locally or mounted. The dashboard does not sync files. Copied records count once; conflicting account assignments are flagged.
+
+Account labels group history, not credentials. **All accounts** shows the current login's quota on this PC; account-filtered views hide quota. Imported history does not inherit your local monthly plan price. See [account setup](docs/accounts.md).
+
+## Understanding the numbers
+
+- **Processed tokens** count reused context on every request. They are not a count of unique text.
+- **API value** uses recorded estimates or catalog prices. It is not your subscription bill. Missing prices stay marked as unpriced.
+- **Per-session averages** cover recorded activity in the selected period. A session is not a completed task or a model-efficiency benchmark.
+
+History refreshes every 15 minutes, along with OpenCode Go and enabled Grok quota. **Refresh** also requests fresh Codex and Claude limits from Omarchy. See [pricing details](docs/pricing.md) for rates and accounting.
+
+Metrics stay on your machine. The ledger stores counters, model names, project paths, session IDs, and timestamps. It does not copy conversation bodies or credentials. There is no telemetry.
+
+## Update
+
+From the checkout, run:
 
 ```sh
 git pull --ff-only
 python3 install.py --with-plugin
 ```
 
-Use the same installer options as your initial install. Updates stop before overwriting installed files you have edited.
+Omit `--with-plugin` if you installed without the bar widget. Updates preserve your history and preferences and stop before overwriting installed files you have edited.
 
-To uninstall, quit the dashboard with **Ctrl+Q**, then run:
+## Uninstall
+
+Quit the dashboard with **Ctrl+Q**, then run from the checkout:
 
 ```sh
 python3 install.py --uninstall
 ```
 
-Uninstall stops the refresh timer and removes or restores the files it manages. Your usage history, preferences, and later file edits are preserved. See [installation details](docs/installation.md) for paths and rollback behavior.
+This removes the managed installation and stops its timer. Your usage history and preferences remain. If you removed the built-in Agents widget from your bar, add it back through your bar layout settings.
 
-## Understanding the numbers
+## Demo and development
 
-**Processed tokens include reused context.** Sending a large cached context on every request counts it again each time. The headline shows the cached share and output total so processed usage is not mistaken for unique text.
+Run `python3 demo.py` for generated data without reading your history or credentials. Press Ctrl+C to close it.
 
-API value uses the bundled catalog rates or the estimate recorded by the coding app. It is not your subscription bill or quota consumption. Missing or incomplete rates stay visibly unpriced. See [pricing details](docs/pricing.md) for sources, cache accounting, and custom rates.
-
-A background timer scans history and refreshes OpenCode Go and enabled Grok quota every 15 minutes. Manual Refresh also requests fresh Codex and Claude limit snapshots from Omarchy's collectors. Go uses the API key already configured in OpenCode; no cookie setup is needed. Enable Grok Build in Settings to show its history and fetch weekly quota using the existing Grok login. If that login expires, run `grok login`. The dashboard does not refresh or change credentials.
-
-## Multiple accounts
-
-In Settings, add an account name and its agent home folders, such as `/mnt/work/.codex` and `/mnt/work/.claude`. Each account can contain several sources or synced copies. Use the account filter or Accounts breakdown to compare them. See [account setup](docs/accounts.md) for folder formats and deduplication.
-
-These labels group history. They do not switch credentials or collect quota for every account. All accounts shows the current login’s quota separately; filtered account views hide it. Monthly plan comparisons are hidden when the view contains imported or unassigned account history.
-
-A recorded session is not a completed task. Per-session averages describe activity in the selected period, not which model finished equivalent work more efficiently.
-
-## Coverage and privacy
-
-| Source | Local history | Account limits |
-| --- | --- | --- |
-| Codex | CLI and Codex desktop rollouts, including archives | Omarchy collector |
-| Claude Code | Assistant usage in project transcripts | Omarchy collector |
-| Grok Build | Completed turns, model calls, recorded API value | Existing Grok login |
-| Gemini CLI | JSON/JSONL sessions and nested subagents | If an Omarchy quota snapshot is available |
-| OpenCode Go | Records routed through `opencode-go` | Existing OpenCode Go connection |
-| OpenCode | Other routes, with a separate route breakdown | Not collected |
-| Pi / Oh My Pi | Assistant usage, including saved branches | Not collected |
-
-On a fresh install, sources with recorded usage appear automatically. Use Settings to choose visible sources, set optional monthly prices, and add mounted or synced history folders. Existing preferences are preserved. The dashboard does not perform remote sync.
-
-Normal ChatGPT, Grok web, and Gemini web conversations are not included. Cursor, Copilot, Windsurf, and Antigravity need separate integrations. Missing telemetry is never converted into estimated token counts. See [provider coverage](docs/provider-coverage.md) for formats, limitations, and validation.
-
-Metrics stay on your machine. Stored records include token counters, model, project path, client, session ID, and time. Conversation bodies and credentials are not copied. There is no telemetry. Review project names and paths before sharing screenshots or reports.
-
-## Demo
-
-Try the UI with generated data, without reading your history or credentials:
-
-```sh
-python3 demo.py
-```
-
-Press Ctrl+C in the terminal to stop the demo. To render a screenshot offscreen:
-
-```sh
-python3 demo.py --capture /tmp/usage-dashboard.png
-```
-
-## Development
-
-```sh
-python3 -m unittest discover -s tests -v
-python3 -m py_compile collector.py install.py demo.py
-omarchy plugin validate ./plugin
-```
-
-Tests cover token accounting, deduplication, provider filters, pricing, installation, and rollback. See [CONTRIBUTING.md](CONTRIBUTING.md) for UI checks.
+See [Contributing](CONTRIBUTING.md) for tests and UI checks.
 
 ## Credits
 
-Independent community project. The bar plugin is adapted from Omarchy's Agents plugin, and the bundled pricing snapshot comes from LiteLLM. Both retain their original license notices.
+Independent community project. The bar widget is adapted from Omarchy's Agents plugin. The pricing snapshot comes from LiteLLM.
 
 [MIT license](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md)

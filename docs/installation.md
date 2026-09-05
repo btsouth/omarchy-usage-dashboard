@@ -16,7 +16,7 @@ The installer runs without sudo. It checks all tracked destinations before chang
 
 XDG config, data, and state paths are respected. The launchers remain under `~/.local/bin`, which should be on PATH. Set custom source-home variables such as CODEX_HOME consistently for your shell and systemd user manager if you use them.
 
-`--with-plugin` adds a separate widget, never replaces the stock Agents widget. You may remove the old widget through Omarchy's bar settings if you prefer a single icon. On uninstall, an entry changed after installation is left alone; remove it through bar settings if needed. Other shell configuration is preserved.
+`--with-plugin` installs the AI Usage Dashboard widget alongside the built-in Agents widget. To use it as your only AI widget, remove Agents from your bar layout and keep AI Usage Dashboard. This hides the old widget without changing its packaged files. The application menu entry and the widget's Open analytics button open the same dashboard. On uninstall, an entry changed after installation is left alone; remove it through bar settings if needed. Other shell configuration is preserved.
 
 `--no-systemd` writes files without enabling, stopping, or reloading services. It is intended for staged installs and automated tests. Enable the installed timer manually when staging is complete.
 
