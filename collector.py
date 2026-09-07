@@ -25,8 +25,8 @@ HOME = Path.home()
 STATE = Path(os.getenv('XDG_STATE_HOME', HOME / '.local/state')) / 'omarchy/ai-usage'
 CONFIG = Path(os.getenv('XDG_CONFIG_HOME', HOME / '.config')) / 'omarchy/ai-usage/settings.json'
 PROVIDERS = {'codex': 'Codex', 'claude': 'Claude', 'opencode-go': 'OpenCode Go', 'grok': 'Grok Build',
-             'gemini': 'Gemini CLI', 'opencode': 'OpenCode', 'pi': 'Pi', 'omp': 'Oh My Pi'}
-HOME_KEYS = ('codexHomes', 'claudeHomes', 'grokHomes', 'geminiHomes', 'opencodeHomes', 'piHomes', 'ompHomes')
+             'gemini': 'Gemini CLI', 'opencode': 'OpenCode', 'pi': 'Pi', 'omp': 'Oh My Pi', 'muse': 'Muse'}
+HOME_KEYS = ('codexHomes', 'claudeHomes', 'grokHomes', 'geminiHomes', 'opencodeHomes', 'piHomes', 'ompHomes', 'museHomes')
 DEFAULTS = {'enabled': ['codex', 'claude', 'opencode-go'], 'monthlyPrices': {},
             **{key: [] for key in HOME_KEYS}, 'accounts': [], 'localAccountLabel': 'Local', 'windowOpacity': 0.985}
 FIELDS = ('input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h', 'reasoning')
@@ -260,6 +260,56 @@ def gemini_records(path):
                          input=max(0, inp - read), output=out + thoughts, cacheRead=read, reasoning=thoughts)
 
 
+def muse_records(path):
+    session, project = path.parent.name, ''
+    with path.open(errors='replace') as f:
+        for raw in f:
+            try: outer = json.loads(raw)
+            except ValueError: continue
+            if not isinstance(outer, dict): continue
+            # The first line is a retained_frame envelope whose children hold
+            # the real records as encoded strings. The rest are direct.
+            records = []
+            if isinstance(outer.get('children'), list) and not isinstance(outer.get('payload'), dict):
+                for child in outer['children']:
+                    if not isinstance(child, dict): continue
+                    try: records.append(json.loads(child.get('record_json', '')))
+                    except (ValueError, AttributeError): continue
+            else:
+                records = [outer]
+            for entry in records:
+                if not isinstance(entry, dict): continue
+                payload = entry.get('payload')
+                if not isinstance(payload, dict): continue
+                if payload.get('kind') in ('metadata', 'route_facts'):
+                    info = payload.get('record')
+                    if not isinstance(info, dict): info = {}
+                    project = info.get('workspace_root') or info.get('cwd') or project
+                    continue
+                # Only model_completed carries per-model token usage. The
+                # goal_usage_attribution provider rows duplicate the same
+                # counts and its tool rows are zero, so they are ignored.
+                event = payload.get('event')
+                if not isinstance(event, dict) or event.get('kind') != 'model_completed': continue
+                usage = event.get('usage')
+                if not isinstance(usage, dict): continue
+                stream = entry.get('stream')
+                if not isinstance(stream, dict): stream = {}
+                session = str(stream.get('id') or session)
+                model = event.get('model') or 'unknown'
+                response = event.get('response_id')
+                key = digest('muse', response) if response else digest('muse', session, entry.get('recorded_at'), model)
+                # input_tokens includes reused context, like Codex. The two
+                # cache spellings report the same count; never add both.
+                read = number(usage.get('cache_read_tokens')) or number(usage.get('cached_tokens'))
+                yield record(key, 'muse', session, number(entry.get('recorded_at')) // 1000000,
+                             model, project, 'Muse',
+                             input=max(0, number(usage.get('input_tokens')) - read),
+                             output=usage.get('output_tokens'), cacheRead=read,
+                             cacheWrite=usage.get('cache_write_tokens'),
+                             reasoning=usage.get('reasoning_tokens'))
+
+
 def reported_value(value):
     try:
         amount = float(value)
@@ -355,12 +405,13 @@ class Ledger:
             ('grok', [os.getenv('GROK_HOME', str(HOME / '.grok'))] + cfg.get('grokHomes', []), grok_records),
             ('gemini', [str(HOME / '.gemini')] + cfg.get('geminiHomes', []), gemini_records),
             ('pi', [os.getenv('PI_CODING_AGENT_DIR', str(HOME / '.pi/agent'))] + cfg.get('piHomes', []), pi_records),
-            ('omp', [str(HOME / '.omp/agent')] + cfg.get('ompHomes', []), lambda path: pi_records(path, 'omp'))):
+            ('omp', [str(HOME / '.omp/agent')] + cfg.get('ompHomes', []), lambda path: pi_records(path, 'omp')),
+            ('muse', [os.getenv('MUSE_HOME') or str(Path(os.getenv('XDG_DATA_HOME', HOME / '.local/share')) / 'muse')] + cfg.get('museHomes', []), muse_records)):
             for root in sorted(set(roots)):
                 root = Path(root).expanduser()
                 folders = [root / 'sessions', root / 'archived_sessions'] if provider == 'codex' else [root / {'claude': 'projects', 'gemini': 'tmp'}.get(provider, 'sessions')]
                 for folder in folders:
-                    pattern = 'updates.jsonl' if provider == 'grok' else '*.json*' if provider == 'gemini' else '*.jsonl'
+                    pattern = 'updates.jsonl' if provider == 'grok' else '*.json*' if provider == 'gemini' else 'session.jsonl' if provider == 'muse' else '*.jsonl'
                     files = sorted(folder.rglob(pattern)) if folder.exists() else []
                     if provider == 'gemini': files = [p for p in files if p.suffix in ('.json', '.jsonl') and 'chats' in p.relative_to(folder).parts[:-1]]
                     source = {'provider': provider, 'path': str(folder), 'files': len(files), 'exists': folder.exists(),
@@ -425,26 +476,32 @@ class Ledger:
 
 def load_rates():
     path = STATE / 'rates.json'
-    # Bundled, attributed snapshot works offline. A user catalog can override it.
-    source = path if path.exists() else Path(__file__).with_name('catalog.json')
+    # Bundled, attributed snapshot works offline. Documented official overrides
+    # come next. A user catalog always wins where it sets a rate.
     try:
-        data = json.loads(source.read_text())
+        data = json.loads(Path(__file__).with_name('catalog.json').read_text())
         if not isinstance(data.get('document'), dict): raise ValueError('Invalid catalog')
-        data.setdefault('source', 'User pricing catalog')
     except (OSError, ValueError, AttributeError):
         data = {'document': {}, 'source': 'Pricing catalog unavailable', 'fetchedAtMs': None}
-    # Preserve user rates while filling newly supported models from the bundle.
+    else:
+        data.setdefault('source', 'Bundled pricing catalog')
+    for name, label in [('pricing.json', 'OpenCode Go official rates'), ('muse-pricing.json', 'Muse official rates')]:
+        try:
+            official = json.loads(Path(__file__).with_name(name).read_text())
+            if not isinstance(official.get('models'), dict): raise ValueError('Invalid override')
+            verified = official['verifiedAt']
+            if not isinstance(verified, str): raise ValueError('Invalid override')
+            data['document'].update(official['models'])
+            data['source'] += f' + {label} (' + verified + ')'
+        except (OSError, ValueError, TypeError, KeyError): pass
+    # Preserve user rates on top of every bundled and official entry.
     if path.exists():
         try:
-            bundled = json.loads(Path(__file__).with_name('catalog.json').read_text())
-            data['document'] = bundled['document'] | data['document']
-            data['source'] += ' + bundled models'
-        except (OSError, ValueError, TypeError, KeyError): pass
-    try:
-        official = json.loads(Path(__file__).with_name('pricing.json').read_text())
-        data['document'].update(official['models'])
-        data['source'] += ' + OpenCode Go official rates (' + official['verifiedAt'] + ')'
-    except (OSError, ValueError): pass
+            user = json.loads(path.read_text())
+            if not isinstance(user.get('document'), dict): raise ValueError('Invalid catalog')
+            data['document'] = data['document'] | user['document']
+            data['source'] = user.get('source', 'User pricing catalog') + ' + bundled and official models'
+        except (OSError, ValueError, TypeError, KeyError, AttributeError): pass
     return data
 
 
@@ -528,10 +585,12 @@ def go_quota(force=False):
 def quota(provider):
     if provider in ('opencode', 'pi', 'omp'):
         return {'limits': [], 'error': 'Account limits belong to the underlying provider and are not collected here.'}
-    if provider in ('opencode-go', 'grok'):
-        try: d = json.loads((STATE / ('grok-quota.json' if provider == 'grok' else 'go-quota.json')).read_text())
+    if provider in ('opencode-go', 'grok', 'muse'):
+        try: d = json.loads((STATE / {'opencode-go': 'go-quota.json', 'grok': 'grok-quota.json', 'muse': 'muse-quota.json'}[provider]).read_text())
         except (OSError, ValueError): d = {}
-        return {'limits': d.get('limits', []), 'updatedAt': d.get('updatedAt'), 'error': d.get('error', '')}
+        result = {'limits': d.get('limits', []), 'updatedAt': d.get('updatedAt'), 'error': d.get('error', '')}
+        if provider == 'muse': result['plan'] = d.get('plan', '')
+        return result
     p = STATE.parent / 'agents/usage' / (provider + '.json')
     try:
         d = json.loads(p.read_text())
@@ -616,6 +675,58 @@ def grok_quota(force=False):
         cached = {'limits': limits, 'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(), 'error': ''}
     except Exception as exc:
         cached['error'] = str(exc) if isinstance(exc, QuotaUnavailable) else 'Grok quota unavailable. Check your Grok login.'
+    cached['attemptedAt'] = time.time()
+    cached['authVersion'] = auth_version
+    atomic_json(path, cached)
+    return cached
+
+
+def muse_quota(force=False):
+    path = STATE / 'muse-quota.json'
+    auth_path = Path(os.getenv('XDG_CONFIG_HOME', HOME / '.config')) / 'muse/auth.json'
+    try:
+        stat = auth_path.stat()
+        auth_version = [stat.st_mtime_ns, stat.st_size]
+    except OSError: auth_version = None
+    try: cached = json.loads(path.read_text())
+    except (OSError, ValueError): cached = {}
+    if not force and cached.get('authVersion') == auth_version and time.time() - cached.get('attemptedAt', 0) < 300: return cached
+    try:
+        auth = json.loads(auth_path.read_text())
+        meta = (auth.get('providers') or {}).get('meta') or {}
+        token = meta.get('access_token')
+        if not token: raise QuotaUnavailable('Run muse login to read Muse quota.')
+        base = str(meta.get('api_base_url') or 'https://api.meta.ai/v1').rstrip('/')
+        if base.endswith('/v1'): base = base[:-len('/v1')]
+        request = urllib.request.Request(base + '/muse-code/key', data=json.dumps({}).encode(),
+            headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json',
+                     'User-Agent': 'Omarchy-AI-Usage/0.1'})
+        with urllib.request.urlopen(request, timeout=12) as response: minted = json.load(response)
+        if not isinstance(minted, dict): raise ValueError('Muse returned an unrecognized quota response.')
+        usage = minted.get('subs_usage')
+        if not isinstance(usage, dict): raise ValueError('Muse returned no recognized quota windows.')
+        windows = []
+        window = usage.get('window')
+        if isinstance(window, dict) and isinstance(window.get('used_percent'), (int, float)) and 0 <= window['used_percent'] <= 100:
+            mins = window.get('window_duration_mins')
+            label = f'Session ({mins // 60}-hour)' if isinstance(mins, int) and mins >= 60 and mins % 60 == 0 else 'Session'
+            entry = {'label': label, 'percent': window['used_percent'] / 100}
+            reset = window.get('resets_at')
+            if reset: entry['resetsAt'] = dt.datetime.fromtimestamp(timestamp(reset), dt.timezone.utc).isoformat()
+            windows.append(entry)
+        weekly = usage.get('weekly')
+        if isinstance(weekly, dict) and isinstance(weekly.get('used_percent'), (int, float)) and 0 <= weekly['used_percent'] <= 100:
+            entry = {'label': 'Weekly (7-day)', 'percent': weekly['used_percent'] / 100}
+            reset = weekly.get('resets_at')
+            if reset: entry['resetsAt'] = dt.datetime.fromtimestamp(timestamp(reset), dt.timezone.utc).isoformat()
+            windows.append(entry)
+        if not windows: raise ValueError('Muse returned no recognized quota windows.')
+        # Only display-safe fields enter the cache. Minted key material is
+        # never persisted, and errors below never quote it either.
+        cached = {'limits': windows, 'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(), 'error': '',
+                  'plan': str(minted.get('subs_tier_name') or '')}
+    except Exception as exc:
+        cached['error'] = str(exc) if isinstance(exc, QuotaUnavailable) else 'Muse quota unavailable. Check your Muse login.'
     cached['attemptedAt'] = time.time()
     cached['authVersion'] = auth_version
     atomic_json(path, cached)
@@ -748,7 +859,7 @@ def write_agent_record(ledger, provider):
     today_data = next((x['providers'][provider] for x in data['daily'] if x['date'] == today), finish(bucket()))
     record_data = {'schemaVersion': 1, 'id': provider, 'name': PROVIDERS[provider],
        'updatedAt': q.get('updatedAt'), 'ready': bool(q.get('limits') or total_records), 'hasLocalStats': True,
-       'hasPromptStats': False, 'tierLabel': 'Go' if provider == 'opencode-go' else '', 'limits': q.get('limits', []), 'usageStatusText': q.get('error', ''),
+       'hasPromptStats': False, 'tierLabel': 'Go' if provider == 'opencode-go' else q.get('plan', '') if provider == 'muse' else '', 'limits': q.get('limits', []), 'usageStatusText': q.get('error', ''),
        'todayTotalTokens': today_data['tokens'], 'todayPrompts': today_data['requests'], 'todaySessions': today_data['sessions'],
        'totalPrompts': total_records, 'totalSessions': total_sessions,
        'activeDays': len(active_dates), 'activeDates': active_dates,
@@ -788,6 +899,9 @@ def main():
             if args.action == 'scan' and 'grok' in cfg['enabled']:
                 grok_quota(args.force)
                 write_agent_record(ledger, 'grok')
+            if args.action == 'scan' and 'muse' in cfg['enabled']:
+                muse_quota(args.force)
+                write_agent_record(ledger, 'muse')
             if args.action == 'scan':
                 for p in ('gemini', 'opencode', 'pi', 'omp'):
                     if p in cfg['enabled']: write_agent_record(ledger, p)

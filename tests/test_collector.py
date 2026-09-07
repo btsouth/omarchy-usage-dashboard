@@ -246,6 +246,231 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(ledger.db.execute("SELECT COUNT(*),SUM(input+output) FROM events WHERE provider='gemini'").fetchone(), (1, 135))
         ledger.db.close()
 
+    def muse_event(self, usage=None, response='resp_test1', recorded_us=1788791137057784,
+                     model='muse-spark-1.3-contributor', session='test-session'):
+        event = {'kind': 'model_completed', 'model': model, 'duration_ms': 1000,
+                 'usage': usage if usage is not None else {
+                     'input_tokens': 42733, 'output_tokens': 184, 'reasoning_tokens': 100,
+                     'cache_read_tokens': 29425, 'cache_write_tokens': 0, 'cached_tokens': 29425}}
+        if response is not None: event['response_id'] = response
+        return {'schema_version': 1, 'id': 'event-id', 'stream': {'kind': 'session', 'id': session},
+                'sequence': 56, 'recorded_at': recorded_us, 'record_type': 'event',
+                'payload_type': 'runtime.session', 'payload_schema_version': 1,
+                'payload': {'kind': 'run', 'run_id': 'run-1', 'event': event}}
+
+    def muse_session(self, name, entries):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = []
+        for entry in entries:
+            if isinstance(entry, list):
+                lines.append(json.dumps({'retained_frame': 'session_permission_transaction',
+                    'frame_schema_version': 1, 'outer_log_ordinal': 1, 'transaction_id': 't',
+                    'children': [{'child_index': i, 'record_json': json.dumps(e)}
+                                 for i, e in enumerate(entry)]}))
+            else:
+                lines.append(json.dumps(entry))
+        path.write_text('\n'.join(lines) + '\n')
+        return path
+
+    def test_muse_envelope_unwrap_mapping_and_microsecond_ts(self):
+        meta = {'schema_version': 1, 'id': 'meta', 'stream': {'kind': 'session', 'id': 's'},
+                'sequence': 3, 'recorded_at': 1788791037153195, 'record_type': 'event',
+                'payload_type': 'runtime.session.metadata', 'payload_schema_version': 1,
+                'payload': {'kind': 'metadata', 'record': {'workspace_root': '/project'}}}
+        path = self.muse_session('2026/09/07/s/session.jsonl', [[meta], self.muse_event(session='s')])
+        records = list(c.muse_records(path))
+        self.assertEqual(len(records), 1)
+        r = records[0]
+        self.assertEqual((r['provider'], r['session'], r['model'], r['project'], r['client']),
+                         ('muse', 's', 'muse-spark-1.3-contributor', '/project', 'Muse'))
+        self.assertEqual(r['ts'], 1788791137)
+        self.assertEqual(r['input'], 42733 - 29425)
+        self.assertEqual((r['output'], r['cacheRead'], r['cacheWrite'], r['reasoning']), (184, 29425, 0, 100))
+        # Reasoning stays separate from output; the cache spellings are one count.
+        self.assertEqual(sum(r[f] for f in c.FIELDS[:4]), 42733 + 184)
+
+    def test_muse_legacy_cached_tokens_spelling(self):
+        usage = {'input_tokens': 100, 'output_tokens': 20, 'cached_tokens': 70}
+        path = self.muse_session('s/session.jsonl', [self.muse_event(usage=usage)])
+        r = next(c.muse_records(path))
+        self.assertEqual((r['input'], r['cacheRead']), (30, 70))
+
+    def test_muse_malformed_shapes_do_not_abort_file(self):
+        bad_stream = self.muse_event()
+        bad_stream['stream'] = 'not-a-dict'
+        bad_record = self.muse_event(response='resp_second')
+        bad_record['payload'] = {'kind': 'metadata', 'record': ['not', 'a', 'dict']}
+        good = self.muse_event(response='resp_third')
+        path = self.muse_session('s/session.jsonl', [bad_stream, bad_record, good,
+            {'children': [{'record_json': 'not json'}, 'not-a-dict'], 'payload': {'kind': 'run'}}])
+        records = list(c.muse_records(path))
+        self.assertEqual(len(records), 2)
+        self.assertEqual({r['session'] for r in records}, {'s', 'test-session'})
+
+    def test_muse_ignores_attribution_and_unrelated_rows(self):
+        def attribution(family, reported):
+            return {'schema_version': 1, 'id': family, 'stream': {'kind': 'session', 'id': 's'},
+                    'sequence': 57, 'recorded_at': 1788791137052738, 'record_type': 'event',
+                    'payload_type': 'runtime.session', 'payload_schema_version': 1,
+                    'payload': {'kind': 'run', 'run_id': 'run-1', 'event': {
+                        'kind': 'goal_usage_attribution',
+                        'record': {'quantity': {'input_tokens': 42733, 'output_tokens': 184,
+                                               'reasoning_tokens': 100, 'cached_tokens': 29425,
+                                               'reported': reported, 'unit': 'tokens'},
+                                   'usage_family': family}}}}
+        path = self.muse_session('s/session.jsonl',
+            [attribution('provider', True), attribution('tool', False), {'heartbeat': True}])
+        self.assertEqual(list(c.muse_records(path)), [])
+
+    def test_muse_copied_response_ids_merge(self):
+        entries = [self.muse_event()]
+        first = self.muse_session('one/session.jsonl', entries)
+        second = self.muse_session('two/session.jsonl', entries)
+        ledger = c.Ledger(self.root / 'muse.sqlite')
+        for path in [first, second]:
+            for r in c.muse_records(path): ledger.put(r)
+        self.assertEqual(ledger.db.execute('SELECT COUNT(*) FROM events').fetchone()[0], 1)
+        ledger.db.close()
+
+    def test_muse_retry_without_response_id_collapses(self):
+        small = self.muse_event(response=None, usage={'input_tokens': 10, 'output_tokens': 1})
+        grown = self.muse_event(response=None, usage={'input_tokens': 30, 'output_tokens': 3})
+        path = self.muse_session('s/session.jsonl', [small, grown])
+        ledger = c.Ledger(self.root / 'retry.sqlite')
+        for r in c.muse_records(path): ledger.put(r)
+        self.assertEqual(ledger.db.execute('SELECT COUNT(*),SUM(input),SUM(output) FROM events').fetchone(), (1, 30, 3))
+        ledger.db.close()
+
+    def test_muse_scan_covers_dated_and_subagent_files(self):
+        home = self.root / 'muse'
+        self.muse_session('muse/sessions/2026/09/07/aaa/session.jsonl', [self.muse_event(session='aaa')])
+        self.muse_session('muse/sessions/2026/09/07/aaa/subagent/bbb/session.jsonl',
+                          [self.muse_event(session='bbb', response='resp_sub')])
+        ledger = c.Ledger(self.root / 'scan.sqlite')
+        with patch.object(c, 'HOME', self.root), patch.dict('os.environ', {
+                'MUSE_HOME': str(home), 'CODEX_HOME': str(self.root / 'codex'),
+                'CLAUDE_CONFIG_DIR': str(self.root / 'claude'), 'GROK_HOME': str(self.root / 'grok'),
+                'PI_CODING_AGENT_DIR': str(self.root / 'pi'), 'XDG_DATA_HOME': str(self.root / 'data')}):
+            ledger.scan(c.DEFAULTS)
+            ledger.scan(c.DEFAULTS)
+        rows = ledger.db.execute("SELECT session,input FROM events WHERE provider='muse' ORDER BY session").fetchall()
+        self.assertEqual([r[0] for r in rows], ['aaa', 'bbb'])
+        ledger.db.close()
+
+    def muse_auth(self, config_home, token='dca:test-access-token-secret'):
+        home = self.root / config_home
+        home.mkdir(parents=True, exist_ok=True)
+        (home / 'muse/auth.json').parent.mkdir(parents=True, exist_ok=True)
+        (home / 'muse/auth.json').write_text(json.dumps(
+            {'schema_version': 1, 'providers': {'meta': {
+                'access_token': token, 'api_base_url': 'https://api.meta.ai/v1/',
+                'api_key': 'LLM|test-minted-key-secret', 'mechanism': 'oauth',
+                'obtained_via': 'device_code'}}}))
+        return home
+
+    def minted_key(self, usage='default'):
+        if usage == 'default':
+            usage = {'window': {'used_percent': 16, 'window_duration_mins': 300, 'resets_at': 1788791137},
+                     'weekly': {'used_percent': 14, 'resets_at': 1789344000}, 'tier': '1'}
+        return {'api_key': 'LLM|test-minted-key-secret', 'subs_tier_name': 'Muse Code Power Usage',
+                'subs_usage': usage}
+
+    def muse_urlopen(self, minted):
+        import io
+        def fake(request, timeout=12):
+            assert request.full_url == 'https://api.meta.ai/muse-code/key', request.full_url
+            assert request.get_method() == 'POST'
+            assert 'dca:test-access-token-secret' in request.get_header('Authorization')
+            return io.BytesIO(json.dumps(minted).encode())
+        return fake
+
+    def test_muse_quota_maps_windows_tier_and_hides_key_material(self):
+        config = self.muse_auth('config')
+        with patch.object(c, 'STATE', self.root / 'state'), patch.dict('os.environ', {'XDG_CONFIG_HOME': str(config)}):
+            with patch.object(c.urllib.request, 'urlopen', side_effect=self.muse_urlopen(self.minted_key())) as request:
+                quota = c.muse_quota(True)
+                self.assertEqual(request.call_count, 1)
+            self.assertEqual(quota['error'], '')
+            self.assertEqual(quota['plan'], 'Muse Code Power Usage')
+            by_label = {w['label']: w for w in quota['limits']}
+            self.assertAlmostEqual(by_label['Session (5-hour)']['percent'], .16)
+            self.assertAlmostEqual(by_label['Weekly (7-day)']['percent'], .14)
+            self.assertEqual(by_label['Weekly (7-day)']['resetsAt'],
+                             dt.datetime.fromtimestamp(1789344000, dt.timezone.utc).isoformat())
+            raw = (c.STATE / 'muse-quota.json').read_text()
+            self.assertNotIn('dca:test-access-token-secret', raw)
+            self.assertNotIn('LLM|test-minted-key-secret', raw)
+            self.assertNotIn('dca:test-access-token-secret', json.dumps(quota))
+            self.assertEqual(c.quota('muse')['plan'], 'Muse Code Power Usage')
+
+    def test_muse_quota_missing_auth_reports_login_and_keeps_stale(self):
+        with patch.object(c, 'STATE', self.root / 'state'), patch.dict('os.environ', {'XDG_CONFIG_HOME': str(self.root / 'empty')}), patch.object(c.urllib.request, 'urlopen') as request:
+            c.atomic_json(c.STATE / 'muse-quota.json', {'limits': [{'label': 'Weekly (7-day)', 'percent': .1}], 'updatedAt': 'old'})
+            quota = c.muse_quota(True)
+            self.assertIn('login', quota['error'])
+            self.assertEqual(quota['limits'][0]['percent'], .1)
+            request.assert_not_called()
+
+    def test_muse_quota_errors_do_not_expose_credentials(self):
+        import io
+        config = self.muse_auth('config')
+        def failing(request, timeout=12):
+            raise c.urllib.error.HTTPError(request.full_url, 401, 'Unauthorized', {}, io.BytesIO(b'bad dca:test-access-token-secret'))
+        with patch.object(c, 'STATE', self.root / 'state'), patch.dict('os.environ', {'XDG_CONFIG_HOME': str(config)}), patch.object(c.urllib.request, 'urlopen', side_effect=failing):
+            quota = c.muse_quota(True)
+            self.assertNotIn('dca:test-access-token-secret', json.dumps(quota))
+            self.assertNotIn('LLM|test-minted-key-secret', json.dumps(quota))
+            with patch.object(c.urllib.request, 'urlopen', side_effect=self.muse_urlopen({'subs_usage': {}})):
+                quota = c.muse_quota(True)
+                self.assertIn('quota', quota['error'])
+                self.assertNotIn('dca:test-access-token-secret', json.dumps(quota))
+
+    def test_muse_login_invalidates_cached_error(self):
+        config = self.muse_auth('config')
+        auth = config / 'muse/auth.json'
+        with patch.object(c, 'STATE', self.root / 'state'), patch.dict('os.environ', {'XDG_CONFIG_HOME': str(config)}):
+            c.atomic_json(c.STATE / 'muse-quota.json', {'error': 'stale', 'attemptedAt': 0, 'authVersion': None})
+            with patch.object(c.urllib.request, 'urlopen', side_effect=self.muse_urlopen(self.minted_key())) as request:
+                self.assertEqual(c.muse_quota()['error'], '')
+                self.assertEqual(request.call_count, 1)
+                # A second call inside the throttle window reuses the cache.
+                self.assertEqual(c.muse_quota()['error'], '')
+                self.assertEqual(request.call_count, 1)
+                # Re-login (changed auth file) bypasses the throttle.
+                auth.write_text(auth.read_text() + ' ')
+                self.assertEqual(c.muse_quota()['error'], '')
+                self.assertEqual(request.call_count, 2)
+
+    def test_muse_scan_refreshes_quota_before_record(self):
+        import contextlib
+        import io as stdlib_io
+        import sys
+        home = self.root / 'musehome'
+        (home / 'sessions').mkdir(parents=True)
+        config = self.muse_auth('config')
+        with patch.object(c, 'STATE', self.root / 'state'), patch.object(c, 'CONFIG', self.root / 'settings.json'), patch.object(c, 'HOME', self.root), patch.dict('os.environ', {
+                'MUSE_HOME': str(home), 'XDG_CONFIG_HOME': str(config), 'XDG_DATA_HOME': str(self.root / 'data'),
+                'CODEX_HOME': str(self.root / 'codex'), 'CLAUDE_CONFIG_DIR': str(self.root / 'claude'),
+                'GROK_HOME': str(self.root / 'grok'), 'PI_CODING_AGENT_DIR': str(self.root / 'pi')}), patch.object(
+                c.urllib.request, 'urlopen', side_effect=self.muse_urlopen(self.minted_key())), patch.object(
+                sys, 'argv', ['collector.py', 'scan']):
+            c.save_settings(c.DEFAULTS | {'enabled': ['muse']})
+            with contextlib.redirect_stdout(stdlib_io.StringIO()):
+                c.main()
+            record = json.loads((c.STATE.parent / 'agents/usage/muse.json').read_text())
+            self.assertAlmostEqual(record['limits'][1]['percent'], .14)
+            self.assertEqual(record['tierLabel'], 'Muse Code Power Usage')
+            quota_file = json.loads((c.STATE / 'muse-quota.json').read_text())
+            self.assertEqual(quota_file['limits'], record['limits'])
+
+    def test_muse_settings_round_trip_keeps_home(self):
+        with patch.object(c, 'CONFIG', self.root / 'settings.json'):
+            config = c.save_settings(c.DEFAULTS | {'museHomes': ['/mounted/.local/share/muse']})
+            self.assertEqual(config['museHomes'], ['/mounted/.local/share/muse'])
+            again = c.save_settings(config)
+            self.assertEqual(again['museHomes'], ['/mounted/.local/share/muse'])
+
     def test_pi_and_omp_copied_branches_preserve_spend(self):
         entry = {'type': 'message', 'id': 'short-id', 'timestamp': '2026-09-04T12:00:00Z',
                  'message': {'role': 'assistant', 'model': 'custom', 'provider': 'openrouter',
@@ -305,6 +530,37 @@ class CollectorTests(unittest.TestCase):
             ledger.scan(c.DEFAULTS)
         self.assertEqual(ledger.db.execute('SELECT COUNT(*),SUM(input+output),SUM(reportedValue) FROM events').fetchone(), (1, 30, .25))
         ledger.db.close()
+
+    def test_muse_contributor_and_standard_rates(self):
+        with patch.object(c, 'STATE', self.root / 'state'), patch.object(c, 'HOME', self.root):
+            catalog = c.load_rates()['document']
+            contributor = c.record('m', 'muse', 's', 1, 'muse-spark-1.3-contributor', '', 'Muse',
+                                   input=1000000, output=1000000, cacheRead=1000000)
+            self.assertAlmostEqual(c.price(contributor, catalog)[0], 0.1 + 0.2 + 0.002)
+            standard = c.record('m', 'muse', 's', 1, 'muse-spark-1.3', '', 'Muse',
+                                input=1000000, output=1000000, cacheRead=1000000)
+            self.assertAlmostEqual(c.price(standard, catalog)[0], 1.25 + 4.25 + 0.15)
+            self.assertIn('Muse official rates', c.load_rates()['source'])
+
+    def test_muse_unknown_model_and_cache_write_stay_unpriced(self):
+        with patch.object(c, 'STATE', self.root / 'state'), patch.object(c, 'HOME', self.root):
+            catalog = c.load_rates()['document']
+            unknown = c.record('m', 'muse', 's', 1, 'muse-spark-9', '', 'Muse', input=100)
+            self.assertEqual(c.price(unknown, catalog), (None, None))
+            # No published cache-write rate exists for Muse models.
+            written = c.record('m', 'muse', 's', 1, 'muse-spark-1.3-contributor', '', 'Muse',
+                               input=100, cacheWrite=5)
+            self.assertEqual(c.price(written, catalog), (None, None))
+
+    def test_user_catalog_overrides_official_rates(self):
+        with patch.object(c, 'STATE', self.root / 'state'):
+            c.atomic_json(self.root / 'state/rates.json', {'source': 'custom', 'document': {
+                'muse/muse-spark-1.3-contributor': {'input_cost_per_token': 1},
+                'opencode-go/glm-5.3-flash': {'input_cost_per_token': 2}}})
+            catalog = c.load_rates()['document']
+            self.assertEqual(catalog['muse/muse-spark-1.3-contributor']['input_cost_per_token'], 1)
+            self.assertEqual(catalog['opencode-go/glm-5.3-flash']['input_cost_per_token'], 2)
+            self.assertIn('custom', c.load_rates()['source'])
 
     def test_gemini_catalog_fills_user_catalog_gaps_without_repricing(self):
         with patch.object(c, 'STATE', self.root):
