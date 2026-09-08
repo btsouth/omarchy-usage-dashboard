@@ -102,6 +102,7 @@ After every refresh, the dashboard compares each provider's limits against the p
 | Ollama Cloud | Hermes agent sessions and background work | From an Ollama Cloud API key |
 | CommandCode | Hermes agent sessions and Command Code CLI transcripts | From a CommandCode API key |
 | ClinePass | Hermes agent sessions | From a ClinePass API key |
+| Cursor | Cloud usage events (tokens and list-price cost per model) | Billing-cycle usage from your Cursor sign-in |
 | Hermes (OpenCode Go, Ollama Cloud, CommandCode, ClinePass) | Agent sessions, including background work | Not collected; adds to the cards for those routes |
 
 Sources with recorded history appear automatically on a fresh install. Use **Settings** to choose which ones to show. OpenCode Go uses your existing API key; no cookie setup is needed. If Grok authentication expires, run `grok login`. Ollama Cloud, CommandCode, and ClinePass may need a key: type it in **Settings**, export `OLLAMA_API_KEY` / `COMMANDCODE_API_KEY` / `CLINE_API_KEY`, or put it in `~/.config/omarchy/ai-usage/ollama.key` / `commandcode.key` / `clinepass.key` (the key file an Ollama CLI install would use is also read, if one exists).

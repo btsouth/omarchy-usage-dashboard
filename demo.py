@@ -30,13 +30,19 @@ with tempfile.TemporaryDirectory(prefix='usage-dashboard-demo-') as tmp:
     ledger=c.Ledger(c.STATE/'usage.sqlite');rng=random.Random(7);now=dt.datetime.now().astimezone()
     for offset in range(7):
         date=now.date()-dt.timedelta(days=offset)
-        for provider,model in [('codex','gpt-4.1'),('claude','claude-sonnet-4-20250514'),('opencode-go','glm-5.3-flash'),('grok','grok-demo'),('gemini','gemini-3.8-flash'),('opencode','example-model'),('pi','example-model'),('omp','example-model'),('muse','muse-spark-1.3-contributor'),('ollama-cloud','deepseek-v4.1-flash'),('commandcode','deepseek/deepseek-v4.1-flash'),('clinepass','cline-pass/deepseek-v4.1-flash')]:
+        for provider,model in [('codex','gpt-4.1'),('claude','claude-sonnet-4-20250514'),('opencode-go','glm-5.3-flash'),('grok','grok-demo'),('gemini','gemini-3.8-flash'),('opencode','example-model'),('pi','example-model'),('omp','example-model'),('muse','muse-spark-1.3-contributor'),('ollama-cloud','deepseek-v4.1-flash'),('commandcode','deepseek/deepseek-v4.1-flash'),('clinepass','cline-pass/deepseek-v4.1-flash'),('cursor','composer-2.5')]:
             for index in range(rng.randint(15,50)):
                 when=dt.datetime.combine(date,dt.time()).astimezone()+dt.timedelta(minutes=index*2)
                 if when>now:continue
-                ledger.put(c.record(f'{provider}-{offset}-{index}',provider,f'{provider}-{offset}-{index//8}',when.isoformat(),model,
-                    '/demo/'+rng.choice(['website','notes','weather']),'CLI' if provider=='codex' else 'Claude Code' if provider=='claude' else 'Muse' if provider=='muse' else 'Hermes' if provider=='ollama-cloud' else 'Hermes' if provider in ('commandcode','clinepass') else 'OpenCode',
-                    input=rng.randint(500,2000),output=rng.randint(100,1000),cacheRead=rng.randint(10000,100000)), base/('work' if index % 2 else 'local')/provider/'sessions/demo.jsonl')
+                entry = c.record(f'{provider}-{offset}-{index}',provider,f'{provider}-{offset}-{index//8}',when.isoformat(),model,
+                    '/demo/'+rng.choice(['website','notes','weather']),'CLI' if provider=='codex' else 'Claude Code' if provider=='claude' else 'Muse' if provider=='muse' else 'Hermes' if provider=='ollama-cloud' else 'Hermes' if provider in ('commandcode','clinepass') else 'Cursor' if provider=='cursor' else 'OpenCode',
+                    input=rng.randint(500,2000),output=rng.randint(100,1000),cacheRead=rng.randint(10000,100000))
+                if provider == 'cursor':
+                    # Cloud-API shape: token-bearing rows with a list-price
+                    # estimate, one turn each. Values are synthetic.
+                    entry['turns'] = 1
+                    entry['reportedValue'] = round((entry['input'] + entry['output']) * 0.00001, 6)
+                ledger.put(entry, base/('work' if index % 2 else 'local')/provider/'sessions/demo.jsonl')
     ledger.db.execute("UPDATE events SET reportedCostTicks=120000000,modelCalls=3 WHERE provider='grok'")
     ledger.db.execute("UPDATE events SET reportedValue=0.012,apiProvider='example-provider' WHERE provider IN ('opencode','pi','omp')")
     ledger.db.commit();ledger.db.close()
