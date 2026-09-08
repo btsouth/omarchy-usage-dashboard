@@ -12,6 +12,10 @@ c = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(c)
 
 
+class _HTTPError(Exception):
+    def __init__(self, code): super().__init__('HTTP ' + str(code)); self.code = code
+
+
 class CollectorTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -245,6 +249,255 @@ class CollectorTests(unittest.TestCase):
             ledger.scan(c.DEFAULTS | {'geminiHomes': [str(root)]})
         self.assertEqual(ledger.db.execute("SELECT COUNT(*),SUM(input+output) FROM events WHERE provider='gemini'").fetchone(), (1, 135))
         ledger.db.close()
+
+    def cursor_fixture(self):
+        path = Path(__file__).parent / 'fixtures/cursor-api.sample.json'
+        return json.loads(path.read_text())['usageEventsDisplay']
+
+    def test_cursor_fixture_contract_and_total_parser(self):
+        events = self.cursor_fixture()
+        self.assertEqual(len(events), 3)
+        for ev in events:
+            extra = dict(ev, futureUnknownKey={'nested': [1]})
+            r = c.cursor_api_record(extra)
+            self.assertEqual(r['provider'], 'cursor')
+            self.assertTrue(r['ts'] > 0)
+        # Degenerate inputs never raise; unparsable timestamps yield ts 0,
+        # which put() drops.
+        for bad in ({}, {'tokenUsage': None}, {'timestamp': 'not-a-time'}, {'tokenUsage': {'totalCents': 'nan-x'}}):
+            self.assertEqual(c.cursor_api_record(bad)['ts'], 0)
+
+    def test_cursor_record_mapping_tokens_cost_and_client(self):
+        first, free, twin = self.cursor_fixture()
+        r = c.cursor_api_record(first)
+        self.assertEqual((r['input'], r['output'], r['cacheRead']), (300, 2, 205056))
+        self.assertEqual(r['ts'], 1788815371)
+        self.assertAlmostEqual(r['reportedValue'], 0.206292)
+        self.assertEqual((r['turns'], r['model'], r['client'], r['session']), (1, 'synth-model-a', 'Cloud', 'synth-conv-1'))
+        f = c.cursor_api_record(free)
+        self.assertEqual(f['reportedValue'], 0.0)
+        self.assertIsNotNone(f['reportedValue'])
+        self.assertEqual((f['client'], f['session']), ('Cursor', 'cloud'))
+        # Same millisecond, different tokens: distinct records.
+        self.assertNotEqual(r['id'], c.cursor_api_record(twin)['id'])
+        # Refetch stability across int/str/float ms forms.
+        alt = dict(twin, timestamp=1788815371513.0)
+        self.assertEqual(c.cursor_api_record(twin)['id'], c.cursor_api_record(alt)['id'])
+        # None and '' conversation ids canonicalize to the same record.
+        blank = c.cursor_api_record(dict(twin, conversationId=''))
+        none = c.cursor_api_record(dict(twin, conversationId=None))
+        self.assertEqual(blank['id'], none['id'])
+        self.assertEqual((blank['session'], none['session']), ('cloud', 'cloud'))
+
+    def test_cursor_event_ms_coercion(self):
+        for form in ('1788815371513', 1788815371513, '1788815371513.0', 1788815371513.0):
+            self.assertEqual(c.event_ms(form), 1788815371513)
+        self.assertEqual(c.event_ms('2026-08-24T22:25:30Z'), 1787610330000)
+        self.assertEqual(c.event_ms('garbage'), 0)
+
+    def test_cursor_price_uses_reported_value_including_zero(self):
+        ledger = c.Ledger(self.root / 'price.sqlite')
+        for ev in self.cursor_fixture(): ledger.put(c.cursor_api_record(ev))
+        ledger.db.row_factory = sqlite3.Row
+        values = sorted(round(c.price(dict(row), {})[0], 6) for row in ledger.db.execute('SELECT * FROM events'))
+        self.assertEqual(values, [0.0, 0.035, 0.206292])
+        ledger.db.close()
+
+    def test_cursor_walk_stops_on_short_page_and_boundary_repeat(self):
+        first, _, _ = self.cursor_fixture()
+        calls = []
+        full = {'usageEventsDisplay': [first] * 1000}
+        pages = [full, {'usageEventsDisplay': [first]}]
+        def fake_post(token, method, body):
+            calls.append((method, dict(body)))
+            return pages[min(len(calls) - 1, 1)]
+        with patch.object(c, 'cursor_post', fake_post):
+            records, oldest, complete = c.cursor_walk('tok')
+        self.assertTrue(complete)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(oldest, 1788815371513)
+        # The full first page keeps walking with an exclusive bound; the
+        # repeated boundary row then yields zero new ids and halts the walk.
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1][1]['endDate'], 1788815371512)
+
+    def test_cursor_walk_short_first_page_commits(self):
+        first, _, _ = self.cursor_fixture()
+        with patch.object(c, 'cursor_post', return_value={'usageEventsDisplay': [first]}):
+            records, oldest, complete = c.cursor_walk('tok')
+        self.assertTrue(complete)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(oldest, 1788815371513)
+
+    def test_cursor_walk_retries_smaller_page_on_400(self):
+        seen = []
+        def fake_post(token, method, body):
+            seen.append(body.get('pageSize'))
+            if body.get('pageSize') == 1000:
+                raise _HTTPError(400)
+            return {'usageEventsDisplay': []}
+        with patch.object(c, 'cursor_post', fake_post):
+            records, _, complete = c.cursor_walk('tok')
+        self.assertTrue(complete)
+        self.assertEqual(records, [])
+        self.assertEqual(seen, [1000, 100])
+
+    def test_cursor_walk_failure_writes_nothing_and_keeps_cache(self):
+        ledger = c.Ledger(self.root / 'fail.sqlite')
+        ledger.put(c.record('old', 'cursor', 's', 1788810000, 'm', '', 'Cursor', input=1), 'cursor-api')
+        with patch.object(c, 'STATE', self.root / 'state'), \
+             patch.object(c, 'cursor_token', return_value='tok'), \
+             patch.object(c, 'cursor_summary', return_value={'billingCycleStart': '1786479485000'}), \
+             patch.object(c, 'cursor_walk', side_effect=c.CursorApiUnavailable('down')):
+            source, warnings = c.cursor_usage(ledger, force=True)
+        self.assertEqual(ledger.db.execute('SELECT COUNT(*) FROM events').fetchone()[0], 1)
+        self.assertEqual(source.get('readErrors'), 1)
+        self.assertTrue(warnings)
+        cached = json.loads((self.root / 'state/cursor-usage.json').read_text())
+        self.assertNotIn('newestTs', cached)
+        ledger.db.close()
+
+    def test_cursor_purge_removes_legacy_rows_on_success(self):
+        ledger = c.Ledger(self.root / 'purge.sqlite')
+        legacy = c.record('legacy-1', 'cursor', 's', 1788810000, 'unknown', '', 'Cursor')
+        legacy['turns'] = 1
+        ledger.put(legacy, '/home/u/.config/Cursor/User/globalStorage/state.vscdb')
+        first, _, _ = self.cursor_fixture()
+        with patch.object(c, 'STATE', self.root / 'state'), \
+             patch.object(c, 'cursor_token', return_value='tok'), \
+             patch.object(c, 'cursor_summary', return_value={'billingCycleStart': '1786479485000'}), \
+             patch.object(c, 'cursor_walk', return_value=([c.cursor_api_record(first)], 1788815371513, True)):
+            source, warnings = c.cursor_usage(ledger, force=True)
+        self.assertEqual(warnings, [])
+        rows = ledger.db.execute("SELECT id FROM events WHERE provider='cursor'").fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertNotEqual(rows[0][0], 'legacy-1')
+        self.assertEqual(ledger.db.execute("SELECT COUNT(*) FROM event_sources WHERE path LIKE '%state.vscdb'").fetchone()[0], 0)
+        ledger.db.close()
+
+    def test_cursor_empty_success_keeps_legacy_rows(self):
+        ledger = c.Ledger(self.root / 'empty.sqlite')
+        legacy = c.record('legacy-1', 'cursor', 's', 1788810000, 'unknown', '', 'Cursor')
+        legacy['turns'] = 1
+        ledger.put(legacy, '/home/u/.config/Cursor/User/globalStorage/state.vscdb')
+        with patch.object(c, 'STATE', self.root / 'state'), \
+             patch.object(c, 'cursor_token', return_value='tok'), \
+             patch.object(c, 'cursor_summary', return_value={'billingCycleStart': '1786479485000'}), \
+             patch.object(c, 'cursor_walk', return_value=([], 1788815371513, True)):
+            source, warnings = c.cursor_usage(ledger, force=True)
+        self.assertEqual(warnings, [])
+        self.assertNotIn('readErrors', source)
+        self.assertEqual(ledger.db.execute("SELECT COUNT(*) FROM events WHERE provider='cursor'").fetchone()[0], 1)
+        ledger.db.close()
+
+    def test_cursor_resume_walks_past_stop_and_tops_up(self):
+        first, _, twin = self.cursor_fixture()
+        new = dict(first, timestamp='1788829289000', conversationId='new-conv')
+        ledger = c.Ledger(self.root / 'resume.sqlite')
+        calls = []
+        def fake_walk(token, end=None, stop_ms=0, cycle_ms=0):
+            calls.append((end, stop_ms))
+            if end is None:
+                return ([c.cursor_api_record(new)], None, True)
+            # History pages all older than the cached newest marker: the
+            # resume walk must not stop on the incremental bound.
+            self.assertEqual(stop_ms, 0)
+            return ([c.cursor_api_record(first)], 1788815371513, True)
+        with patch.object(c, 'STATE', self.root / 'state'), \
+             patch.object(c, 'cursor_token', return_value='tok'), \
+             patch.object(c, 'cursor_summary', return_value={'billingCycleStart': '1786479485000'}), \
+             patch.object(c, 'cursor_walk', fake_walk):
+            (self.root / 'state').mkdir(parents=True, exist_ok=True)
+            (self.root / 'state/cursor-usage.json').write_text(json.dumps(
+                {'attemptedAt': 0, 'billingCycleStart': 1786479485000, 'newestTs': 1788815371513,
+                 'fullPullPending': True, 'resumeFloorMs': 1788815371514, 'error': ''}))
+            source, warnings = c.cursor_usage(ledger, force=True)
+        self.assertEqual(warnings, [])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(ledger.db.execute('SELECT COUNT(*) FROM events').fetchone()[0], 2)
+        cached = json.loads((self.root / 'state/cursor-usage.json').read_text())
+        self.assertFalse(cached['fullPullPending'])
+        self.assertEqual(cached['newestTs'], 1788829289 * 1000)
+        ledger.db.close()
+
+    def test_main_scan_auto_enable_collects_found_providers(self):
+        seed = c.Ledger(self.root / 'state/usage.sqlite')
+        legacy = c.record('legacy-1', 'cursor', 's', 1788810000, 'unknown', '', 'Cursor')
+        legacy['turns'] = 1
+        seed.put(legacy, '/home/u/.config/Cursor/User/globalStorage/state.vscdb')
+        seed.db.commit()
+        seed.db.close()
+        used = []
+        def fake_usage(ld, force=False):
+            used.append(True)
+            return ({'provider': 'cursor', 'path': 'cursor-api', 'files': 0, 'exists': True, 'kind': 'cloud'}, [])
+        with patch.object(c, 'STATE', self.root / 'state'), \
+             patch.object(c, 'CONFIG', self.root / 'missing-settings.json'), \
+             patch.object(c, 'HOME', self.root), \
+             patch.object(c, 'cursor_usage', fake_usage), \
+             patch.object(c, 'cursor_quota', return_value={}), \
+             patch.object(c, 'go_quota', return_value={}), \
+             patch.object(c, 'grok_quota', return_value={}), \
+             patch('sys.argv', ['collector.py', 'scan']):
+            c.main()
+        self.assertTrue(used)
+
+    def test_cursor_token_missing_warns_and_skips_network(self):
+        ledger = c.Ledger(self.root / 'notoken.sqlite')
+        with patch.object(c, 'STATE', self.root / 'state'), \
+             patch.object(c, 'cursor_token', return_value=None), \
+             patch.object(c, 'cursor_post', side_effect=AssertionError('no network')):
+            source, warnings = c.cursor_usage(ledger, force=True)
+        self.assertEqual(source.get('readErrors'), 1)
+        self.assertTrue(any('sign in' in w.lower() for w in warnings))
+        ledger.db.close()
+
+    def test_cursor_scan_runs_usage_when_enabled(self):
+        ledger = c.Ledger(self.root / 'scan.sqlite')
+        seen = []
+        def fake_usage(ld, force=False):
+            seen.append(ld is ledger)
+            return ({'provider': 'cursor', 'path': 'cursor-api', 'files': 0, 'exists': True, 'kind': 'cloud'}, [])
+        with patch.object(c, 'cursor_usage', fake_usage):
+            meta = ledger.scan(c.DEFAULTS | {'enabled': ['cursor']})
+        self.assertTrue(seen)
+        kinds = [s for s in meta['sources'] if s['provider'] == 'cursor']
+        self.assertEqual(kinds[0]['status'], 'available')
+        ledger.db.close()
+
+    def test_cursor_quota_maps_summary_and_errors(self):
+        summary = {'billingCycleStart': '1786479485000', 'billingCycleEnd': '1789157885000',
+                   'planUsage': {'totalPercentUsed': 100}, 'displayMessage': "You've hit your usage limit"}
+        with patch.object(c, 'STATE', self.root / 'state'), \
+             patch.object(c, 'cursor_token', return_value='tok'), \
+             patch.object(c, 'cursor_summary', return_value=summary):
+            got = c.cursor_quota(force=True)
+            self.assertEqual(c.quota('cursor')['limits'], got['limits'])
+        self.assertEqual(got['limits'][0]['label'], 'Billing cycle')
+        self.assertEqual(got['limits'][0]['percent'], 1.0)
+        self.assertTrue(got['limits'][0]['resetsAt'].startswith('2026-'))
+        self.assertIn('usage limit', got['error'])
+        with patch.object(c, 'STATE', self.root / 'state'), \
+             patch.object(c, 'cursor_token', return_value=None):
+            denied = c.cursor_quota(force=True)
+        self.assertTrue(denied['error'])
+        self.assertIn('expired', c.cursor_api_error(_HTTPError(401)))
+        self.assertIn('unavailable', c.cursor_api_error(ValueError('x')))
+
+    def test_migration_adds_turns_and_put_keeps_only_turns(self):
+        ledger = c.Ledger(self.root / 'mig.sqlite')
+        ledger.db.execute('ALTER TABLE events DROP COLUMN turns')
+        ledger.db.commit()
+        ledger.db.close()
+        fresh = c.Ledger(self.root / 'mig.sqlite')
+        columns = {r[1] for r in fresh.db.execute('PRAGMA table_info(events)')}
+        self.assertIn('turns', columns)
+        empty = c.record('x', 'codex', 's', 1, 'm', '', 'CLI')
+        fresh.put(empty)
+        turn = dict(empty, id='y', provider='cursor', turns=1)
+        fresh.put(turn)
+        self.assertEqual(fresh.db.execute('SELECT COUNT(*) FROM events').fetchone()[0], 1)
+        fresh.db.close()
 
     def test_pi_and_omp_copied_branches_preserve_spend(self):
         entry = {'type': 'message', 'id': 'short-id', 'timestamp': '2026-09-04T12:00:00Z',

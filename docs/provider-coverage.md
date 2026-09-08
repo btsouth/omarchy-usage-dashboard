@@ -13,8 +13,9 @@ This dashboard measures recorded coding activity. A source is the app that saved
 | OpenCode / Go | `~/.local/share/opencode/opencode.db` and `storage/message` | Read-only database access and legacy message files. Stable message IDs merge migrated copies. Go uses its own provider ID; other routes remain under OpenCode. Reasoning is added to output. |
 | Pi | `~/.pi/agent/sessions` | Assistant message usage across all saved branches. Entry IDs plus original timestamps deduplicate copied branches. Cache counters are separate; reasoning is part of output. |
 | Oh My Pi | `~/.omp/agent/sessions` | The same usage categories as Pi, including current title-slot session files. Kept separate from Pi. |
+| Cursor | Cloud DashboardService API (per-event tokens and list-price cost) | Requires the Cursor desktop app sign-in; the session token is read locally and never stored. Events carry per-model input, output, and cache-read tokens plus a list-price cost estimate — plan discounts are not applied per event, so the quota card's billed totals are authoritative. |
 
-Settings accepts additional source folders, including already mounted copies from another computer. Source variables `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GROK_HOME`, and `PI_CODING_AGENT_DIR` are respected. Custom session locations outside these roots must be placed within a configured source's expected directory structure.
+Settings accepts additional source folders, including already mounted copies from another computer. Source variables `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GROK_HOME`, and `PI_CODING_AGENT_DIR` are respected. `CURSOR_HOME` selects the Cursor config root used for the local sign-in lookup. Custom session locations outside these roots must be placed within a configured source's expected directory structure.
 
 Gemini records identify projects by hash, so the dashboard labels them as Gemini project IDs. It does not guess the original filesystem path. Deleted or rewound conversation content does not refund tokens: already recorded usage stays in the metric ledger. Ephemeral sessions and calls that never write usage cannot be recovered.
 
@@ -22,7 +23,7 @@ Gemini records identify projects by hash, so the dashboard labels them as Gemini
 
 History and quota are independent. An expired login can stop quota updates while token history remains readable. Stale quota snapshots retain their timestamp and an error; absence is not treated as zero usage.
 
-Codex and Claude use Omarchy quota snapshots. Grok and OpenCode Go have collectors in this package. Gemini can display an existing Omarchy snapshot. General OpenCode, Pi, and Oh My Pi can use several accounts and providers, so the dashboard does not assign them one quota or subscription price automatically.
+Codex and Claude use Omarchy quota snapshots. Grok and OpenCode Go have collectors in this package. Gemini can display an existing Omarchy snapshot. General OpenCode, Pi, and Oh My Pi can use several accounts and providers, so the dashboard does not assign them one quota or subscription price automatically. Cursor quota comes from its billing-cycle summary; an expired sign-in keeps previous usage with an error.
 
 Grok's completed-turn dollar estimate is used directly. Positive recorded API estimates from OpenCode/Pi/Oh My Pi take precedence over catalog prices. Otherwise exact catalog matches are used and missing prices remain unpriced. See [pricing policy](pricing.md).
 

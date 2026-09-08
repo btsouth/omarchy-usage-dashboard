@@ -61,6 +61,7 @@ Both install options run without sudo and keep working if you move or delete the
 | OpenCode Go | Requests through `opencode-go` | From the existing OpenCode connection |
 | OpenCode | Other model providers used through OpenCode | Not collected |
 | Pi / Oh My Pi | Saved assistant usage | Not collected |
+| Cursor | Cloud usage events (tokens and list-price cost per model) | Billing-cycle usage from your Cursor sign-in |
 
 Sources with recorded history appear automatically on a fresh install. Use **Settings** to choose which ones to show. OpenCode Go uses your existing API key; no cookie setup is needed. If Grok authentication expires, run `grok login`.
 
