@@ -127,7 +127,8 @@ Scope {
             gemini: palette.bright_magenta || "#c6a0d5", opencode: palette.bright_green || "#a7c080",
             pi: palette.bright_white || palette.bright_foreground || "#d4d4d4", omp: palette.red || "#d88b68",
             muse: palette.blue || "#7aa2f7", "ollama-cloud": palette.orange || "#a2734b",
-            "commandcode": palette.bright_green || "#a7c080", "clinepass": palette.cyan || "#2dd5b7"})[id] || root.ink
+            "commandcode": palette.bright_green || "#a7c080", "clinepass": palette.cyan || "#2dd5b7",
+            cursor: palette.magenta || "#c586c0"})[id] || root.ink
         var color=Qt.darker(raw,1), background=luminance(root.base)
         for (var i=0;i<16;i++) {
             var value=luminance(color)
