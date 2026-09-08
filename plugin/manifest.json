@@ -47,6 +47,9 @@
         },
         "omp": {
           "enabled": true
+        },
+        "cursor": {
+          "enabled": true
         }
       },
       "refreshIntervalSec": 900,
