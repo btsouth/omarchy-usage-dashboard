@@ -60,6 +60,9 @@
         "clinepass": {
           "enabled": true
         },
+        "cursor": {
+          "enabled": true
+        },
         "fireworks": {
           "enabled": false
         }

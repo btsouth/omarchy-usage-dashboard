@@ -12,6 +12,7 @@ Open Settings, name the default local history group if needed, then choose **Add
 | Pi / Oh My Pi | Agent folder containing `sessions` |
 | Muse | Data home containing `sessions` |
 | Hermes | Hermes home containing `state.db` (add one entry per route: OpenCode Go, Ollama Cloud, CommandCode, and ClinePass) |
+| Cursor | Cloud usage only; sign in to the Cursor desktop app (no folders to add) |
 
 An account can combine Codex, Claude, and other source folders. OpenCode and OpenCode Go need separate source entries to label both sets of routes in the same database. Folders must already be available locally or mounted. No remote sync or credentials are configured here. Missing folders appear in source coverage and can be connected later.
 
