@@ -47,6 +47,9 @@
         },
         "omp": {
           "enabled": true
+        },
+        "muse": {
+          "enabled": true
         }
       },
       "refreshIntervalSec": 900,

@@ -82,7 +82,7 @@ def main():
         if not shutil.which(command): parser.error('Missing dependency: '+command)
     plan={}
     def add(path,content,mode=0o644): plan[path]=(content.encode() if isinstance(content,str) else content,mode)
-    for name in ['collector.py','catalog.json','pricing.json','launch.sh','refresh.sh','LICENSE']:
+    for name in ['collector.py','catalog.json','pricing.json','muse-pricing.json','launch.sh','refresh.sh','LICENSE']:
         add(runtime/name,(ROOT/name).read_bytes(),0o755 if name.endswith('.sh') else 0o644)
     for folder in ['ui','licenses']:
         for source in (ROOT/folder).rglob('*'):

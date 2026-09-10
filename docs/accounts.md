@@ -10,6 +10,7 @@ Open Settings, name the default local history group if needed, then choose **Add
 | Gemini CLI | Agent home containing `tmp` |
 | OpenCode / OpenCode Go | Data folder containing `opencode.db` or `storage/message` |
 | Pi / Oh My Pi | Agent folder containing `sessions` |
+| Muse | Data home containing `sessions` |
 
 An account can combine Codex, Claude, and other source folders. OpenCode and OpenCode Go need separate source entries to label both sets of routes in the same database. Folders must already be available locally or mounted. No remote sync or credentials are configured here. Missing folders appear in source coverage and can be connected later.
 
