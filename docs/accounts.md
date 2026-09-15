@@ -14,7 +14,7 @@ Open Settings, name the default local history group if needed, then choose **Add
 
 An account can combine Codex, Claude, and other source folders. OpenCode and OpenCode Go need separate source entries to label both sets of routes in the same database. Folders must already be available locally or mounted. No remote sync or credentials are configured here. Missing folders appear in source coverage and can be connected later.
 
-The account filter applies to charts, totals, and breakdowns. The Accounts table compares account/source pairs and opens their recorded sessions. Renaming an account changes its label without reimporting tokens.
+The account filter applies to charts, totals, and breakdowns. The overview shows one card per account, and the Accounts table compares account/source pairs and opens their recorded sessions. Renaming an account changes its label without reimporting tokens.
 
 ## Copies and retained history
 
@@ -26,6 +26,6 @@ The ledger retains previously recorded usage after source files disappear. Older
 
 History labels are not verified login identities. The All accounts view displays only the current login's quota on this PC, with its scope stated. Account-filtered views hide quota. This version does not switch authentication or fetch every account's limits.
 
-Optional monthly prices apply only to the local history group. Imported, conflicting, and unassigned histories do not inherit that price. API estimates still use the same recorded costs and catalog rules in every account view.
+Optional monthly prices can be set per provider (the local history group) or per labelled account. Imported, conflicting, and unassigned histories never inherit the local price. API estimates still use the same recorded costs and catalog rules in every account view.
 
 Averages divide period activity by distinct recorded sessions. Sessions are not completed tasks, and differently sized tasks cannot establish relative model efficiency. API-value shares and averages include only priced usage; unknown rates remain visibly unpriced.

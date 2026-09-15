@@ -61,6 +61,11 @@ Scope {
         {key:"ompHomes",name:"Oh My Pi agent folders",example:"/mnt/other-computer/.omp/agent"},
         {key:"museHomes",name:"Muse homes",example:"/mnt/other-computer/.local/share/muse"}]
     function providerName(id) { var p = providerOptions.find(p => p.id === id); return p ? p.name : id }
+    function accountSources(account) {
+        var names = []
+        ;(account.directories || []).forEach(d => { var n = providerName(d.provider); if (names.indexOf(n) < 0) names.push(n) })
+        return names.join(" + ")
+    }
     function colorFor(id) {
         var raw = ({codex: palette.bright_cyan || "#8cd3cb", claude: palette.bright_red || "#db9f9c",
             "opencode-go": palette.bright_yellow || "#e5c736", grok: palette.bright_blue || "#9cb8db",
@@ -112,13 +117,14 @@ Scope {
         notice = ""
         var s = data ? data.settings : {}
         draftEnabled = (s.enabled || ["codex", "claude", "opencode-go"]).slice()
+        draftAccounts = JSON.parse(JSON.stringify(s.accounts || []))
+        draftLocalLabel = s.localAccountLabel || "Local"
         var prices = {}, homes = {}
         providerOptions.forEach(p => prices[p.id] = s.monthlyPrices && s.monthlyPrices[p.id] !== undefined ? String(s.monthlyPrices[p.id]) : "")
+        draftAccounts.forEach(a => prices[a.id] = s.monthlyPrices && s.monthlyPrices[a.id] !== undefined ? String(s.monthlyPrices[a.id]) : "")
         homeOptions.forEach(h => homes[h.key] = (s[h.key] || []).join("\n"))
         draftPrices = prices
         draftHomes = homes
-        draftAccounts = JSON.parse(JSON.stringify(s.accounts || []))
-        draftLocalLabel = s.localAccountLabel || "Local"
         opacitySlider.value = s.windowOpacity || 0.985
         settingsOpen = true
     }
@@ -494,9 +500,9 @@ Scope {
                         }
                     }
                     GridLayout {
-                        width: parent.width; columns: root.data ? (root.data.providers.length > 3 ? 2 : Math.max(1,root.data.providers.length)) : 3; rowSpacing: 14; columnSpacing: 14
+                        width: parent.width; columns: root.data ? (root.data.cards.length > 3 ? 2 : Math.max(1,root.data.cards.length)) : 3; rowSpacing: 14; columnSpacing: 14
                         Repeater {
-                            model: root.data ? root.data.providers : []
+                            model: root.data ? root.data.cards : []
                             Card {
                                 required property var modelData
                                 Layout.fillWidth: true
@@ -508,7 +514,7 @@ Scope {
                                     spacing: 10
                                     Row {
                                         spacing: 8
-                                        Rectangle { width: 8; height: 8; radius: 4; color: root.colorFor(modelData.id); anchors.verticalCenter: parent.verticalCenter }
+                                        Rectangle { width: 8; height: 8; radius: 4; color: root.colorFor(modelData.provider); anchors.verticalCenter: parent.verticalCenter }
                                         Label { text: modelData.name; font.pixelSize: 16; font.weight: Font.DemiBold }
                                     }
                                     Row {
@@ -517,17 +523,17 @@ Scope {
                                         Sub { text: "tokens"; anchors.bottom: parent.bottom; anchors.bottomMargin: 3 }
                                     }
                                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.valueText(modelData) + " API value · " + modelData.sessions + " sessions" }
-                                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: modelData.valueShare === null ? "No priced API value" : modelData.valueShare.toFixed(1)+"% of priced API value" }
+                                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: modelData.valueShare === null || (modelData.tokens > 0 && modelData.unpricedTokens === modelData.tokens) ? "No priced API value" : modelData.valueShare.toFixed(1)+"% of priced API value" }
                                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: modelData.sessions ? root.compact(modelData.tokensPerSession)+" tokens · "+root.money(modelData.valuePerSession)+" priced value / recorded session" : "No recorded sessions" }
                                     Rectangle { width: parent.width; height: 3; radius: 2; color: root.edge
-                                        Rectangle { width: parent.width*(root.data.summary.tokens ? modelData.tokens/root.data.summary.tokens : 0); height: 3; radius: 2; color: root.colorFor(modelData.id) }
+                                        Rectangle { width: parent.width*(root.data.summary.tokens ? modelData.tokens/root.data.summary.tokens : 0); height: 3; radius: 2; color: root.colorFor(modelData.provider) }
                                     }
                                     Sub {
                                         width: parent.width; wrapMode: Text.WordWrap
                                         text: modelData.monthlyPrice !== null ? root.money(modelData.monthlyPrice)+"/month plan · "+(modelData.monthlyPrice>0?(modelData.value/modelData.monthlyPrice).toFixed(1)+"× plan price in this period":"no plan charge") : "Monthly plan price not set"
                                     }
-                                    Sub { visible: modelData.id === "grok"; width: parent.width; wrapMode: Text.WordWrap; text: root.compact(modelData.modelCalls || 0)+" model calls · "+modelData.requests+" usage records" }
-                                    Sub { visible: !root.selection.account; text: modelData.quotaScope }
+                                    Sub { visible: modelData.provider === "grok"; width: parent.width; wrapMode: Text.WordWrap; text: root.compact(modelData.modelCalls || 0)+" model calls · "+modelData.requests+" usage records" }
+                                    Sub { visible: !root.selection.account && modelData.quotaScope !== ""; text: modelData.quotaScope }
                                     Repeater {
                                         model: modelData.quota.limits || []
                                         Column {
@@ -768,7 +774,19 @@ Scope {
                                 }
                             }
                         }
+                        Repeater { model: root.draftAccounts
+                            Column {
+                                required property var modelData
+                                spacing: 6
+                                Sub { text: (modelData.label || "Untitled account") + (root.accountSources(modelData) ? " · " + root.accountSources(modelData) : "") }
+                                Field { width: 170; placeholderText: "Not set"; Accessible.name: (modelData.label || "Account")+" monthly price"
+                                    text: root.draftPrices[modelData.id] || ""
+                                    onTextEdited: root.draftPrices[modelData.id] = text
+                                }
+                            }
+                        }
                     }
+                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Prices on a provider apply to the local history group; prices on a labelled account apply only to that account." }
                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Grok quota uses its existing login. If it expires, run grok login. The dashboard never changes credentials." }
                     Label { text: "History accounts"; font.pixelSize: 16 }
                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Label agent home folders by account. Keep mirrored folders under the same account. Labels do not switch logins; quota is only for the current login on this PC." }

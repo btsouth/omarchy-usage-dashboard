@@ -56,12 +56,30 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(self.report('work')['summary']['tokens'], 0)
 
     def test_imported_account_never_inherits_local_quota_or_price(self):
+        self.cfg['monthlyPrices'] = {'codex': 200}
         self.add('a', 'work')
         data = self.report('work')['providers'][0]
         self.assertEqual(data['quota']['limits'], [])
         self.assertIsNone(data['monthlyPrice'])
         self.assertIsNone(self.report()['providers'][0]['monthlyPrice'])
         self.assertEqual(self.report()['providers'][0]['quotaScope'], 'Current login on this PC')
+        self.assertIsNone(self.report('work')['cards'][0]['monthlyPrice'])
+
+    def test_overview_cards_split_accounts_and_use_their_own_prices(self):
+        self.cfg['monthlyPrices'] = {'codex': 200, 'personal': 20}
+        self.add('a', 'work', 100)
+        self.add('b', 'personal', 300)
+        self.add('c', 'local', 50)
+        cards = self.report()['cards']
+        self.assertEqual([card['accountId'] for card in cards], ['personal', 'work', 'local'])
+        self.assertEqual([card['name'] for card in cards],
+                         ['Codex · Personal', 'Codex · Work', 'Codex · Local'])
+        self.assertEqual([card['monthlyPrice'] for card in cards], [20, None, 200])
+        self.assertEqual(cards[2]['quota']['limits'], [{'label': 'Local quota'}])
+        self.assertEqual(cards[0]['quota']['limits'], [])
+        self.assertEqual([card['provider'] for card in cards], ['codex', 'codex', 'codex'])
+        self.assertEqual(self.report('personal')['cards'][0]['accountId'], 'personal')
+        self.assertEqual(len(self.report('personal')['cards']), 1)
 
     def test_session_averages_and_priced_share(self):
         self.add('a', 'local', 100, 'one')

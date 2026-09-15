@@ -69,9 +69,6 @@ def save_settings(value):
              'monthlyPrices': {}, **{key: [] for key in HOME_KEYS},
              'accounts': [], 'localAccountLabel': str(value.get('localAccountLabel') or 'Local').strip(),
              'windowOpacity': max(0.55, min(1.0, float(value.get('windowOpacity', 0.985))))}
-    for provider, amount in value.get('monthlyPrices', {}).items():
-        if provider in PROVIDERS and amount is not None and 0 <= float(amount) <= 100000:
-            clean['monthlyPrices'][provider] = float(amount)
     for key in HOME_KEYS:
         clean[key] = sorted({str(Path(p).expanduser().absolute()) for p in value.get(key, []) if str(p).strip()})
     if not clean['localAccountLabel'] or len(clean['localAccountLabel']) > 80: raise ValueError('Give the local history group a name of 1 to 80 characters.')
@@ -95,6 +92,11 @@ def save_settings(value):
             if {'provider': provider, 'path': path} not in directories: directories.append({'provider': provider, 'path': path})
         if not directories: raise ValueError('Add at least one source folder to each account.')
         clean['accounts'].append({'id': aid, 'label': label, 'directories': directories})
+    # A price key is a provider (local history) or a labelled account id.
+    account_ids = {account['id'] for account in clean['accounts']}
+    for name, amount in value.get('monthlyPrices', {}).items():
+        if (name in PROVIDERS or name in account_ids) and amount is not None and 0 <= float(amount) <= 100000:
+            clean['monthlyPrices'][name] = float(amount)
     atomic_json(CONFIG, clean)
     return clean
 
@@ -516,7 +518,7 @@ def price(r, catalog):
     if not rate: return None, None
     context = r['input'] + r['cacheRead'] + r['cacheWrite']
     suffix = ''
-    for threshold, candidate in [(200000, '_above_200k_tokens'), (272000, '_above_272k_tokens')]:
+    for threshold, candidate in [(200000, '_above_200k_tokens'), (256000, '_above_256k_tokens'), (272000, '_above_272k_tokens')]:
         if context > threshold and 'input_cost_per_token' + candidate in rate: suffix = candidate
     def cost(key, fallback=None): return rate.get(key + suffix, rate.get(key, fallback))
     inp, out = cost('input_cost_per_token'), cost('output_cost_per_token')
@@ -828,12 +830,38 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
     account_options = [{'id': aid, 'label': label} for aid, label in labels.items()
                        if aid not in ('conflict', 'unassigned') or aid in assignments.values() or (aid == 'unassigned' and has_unassigned)]
     coverage['additionalHomes'] = sum(len(cfg.get(k, [])) for k in HOME_KEYS) + sum(len(a['directories']) for a in cfg.get('accounts', []))
+    # One overview card per account so labelled histories are never merged.
+    # A named account uses only its own price; the local group uses the
+    # provider price. Quota remains attached to the current login only.
+    named_providers = {d['provider'] for account in cfg.get('accounts', []) for d in account['directories']}
+    cards = []
+    for p, b in providers.items():
+        if provider != 'all' and p != provider: continue
+        group = sorted(((aid, bucket) for (card_provider, aid), bucket in accounts.items() if card_provider == p),
+                       key=lambda item: item[1]['tokens'], reverse=True)
+        for aid, account_bucket in group:
+            fin = finish(account_bucket)
+            if aid == 'local':
+                name = PROVIDERS[p] + (' · ' + labels['local'] if p in named_providers else '')
+                monthly = cfg['monthlyPrices'].get(p)
+                if selection.get('account'):
+                    card_quota, scope = {'limits': [], 'error': 'View All accounts for current-login quota. History labels do not identify credentials.'}, ''
+                else:
+                    card_quota, scope = quota(p), 'Current login on this PC'
+            else:
+                name = PROVIDERS[p] + ' · ' + labels[aid]
+                monthly = cfg['monthlyPrices'].get(aid)
+                card_quota, scope = {'limits': [], 'error': 'Quota is shown for the current login only.'}, ''
+            cards.append(fin | {'provider': p, 'accountId': aid, 'name': name, 'monthlyPrice': monthly,
+                                'quota': card_quota, 'quotaScope': scope,
+                                'valueShare': 100 * fin['value'] / summary['value'] if summary['value'] else None})
     return {'selection': selection, 'generatedAt': time.time(), 'period': {'days': days, 'start': str(start_date), 'end': str(today.date())},
             'accountOptions': account_options,
             'accounts': [r | {'accountId': r['name'], 'name': labels[r['name']]} for r in rows(accounts)],
             'accountWarning': 'Copies of the same history belong to different accounts. Move mirrored folders into one account.' if any(a == 'conflict' for p, a in accounts) else '',
             'availableProviders': [{'id': p, 'name': name} for p, name in PROVIDERS.items()],
             'summary': finish(summary), 'previous': finish(previous),
+            'cards': cards,
             'providers': [finish(b) | {'id': p, 'name': PROVIDERS[p], 'quota': quota(p) if not selection.get('account') else {'limits': [], 'error': 'View All accounts for current-login quota. History labels do not identify credentials.'}, 'quotaScope': 'Current login on this PC',
                                       'valueShare': 100 * b['value'] / summary['value'] if summary['value'] else None,
                                       'monthlyPrice': cfg['monthlyPrices'].get(p) if provider_accounts[p] <= {'local'} else None}

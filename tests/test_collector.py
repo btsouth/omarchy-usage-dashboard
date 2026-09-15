@@ -511,6 +511,24 @@ class CollectorTests(unittest.TestCase):
             self.assertEqual(config['ompHomes'], ['/mounted/.omp/agent'])
             self.assertEqual(config['enabled'], list(c.PROVIDERS))
 
+    def test_account_prices_save_and_unknown_price_keys_drop(self):
+        with patch.object(c, 'CONFIG', self.root / 'settings.json'):
+            config = c.save_settings(c.DEFAULTS | {'enabled': ['codex'], 'monthlyPrices': {'codex': 200, 'work': 20, 'ghost': 5},
+                'accounts': [{'id': 'work', 'label': 'Work', 'directories': [{'provider': 'codex', 'path': '/work'}]}]})
+            self.assertEqual(config['monthlyPrices'], {'codex': 200, 'work': 20})
+
+    def test_supplemental_go_rates_price_popular_models(self):
+        with patch.object(c, 'STATE', self.root):
+            rates = c.load_rates()['document']
+        for model, expected in [('glm-5.3', 1.4 + 4.4 + 0.26),
+                                ('deepseek-v4.1-flash', 0.15 + 0.6 + 0.003)]:
+            with self.subTest(model=model):
+                rec = c.record('x', 'opencode-go', 's', '2026-09-04T12:00:00Z', model, '/p', 'OpenCode',
+                               input=1_000_000, output=1_000_000, cacheRead=1_000_000)
+                self.assertAlmostEqual(c.price(rec, rates)[0], expected, places=9)
+        free = c.record('x', 'opencode-go', 's', '2026-09-04T12:00:00Z', 'ox-alpha-free', '/p', 'OpenCode', input=1000)
+        self.assertEqual(c.price(free, rates)[0], 0)
+
     def test_opencode_legacy_and_database_copies_merge(self):
         root = self.root / 'data/opencode'; root.mkdir(parents=True)
         item = {'id': 'm1', 'sessionID': 's', 'role': 'assistant', 'providerID': 'openrouter',

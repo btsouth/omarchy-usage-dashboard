@@ -2,7 +2,7 @@
 
 API value uses token categories and the price snapshot shipped with this version. The bundled LiteLLM subset contains OpenAI, Anthropic, and Gemini entries and the price fields consumed by the collector. Its source revision, URL, and retrieval time are embedded in `catalog.json`.
 
-The OpenCode Go model override is kept separately in `pricing.json`, with its documentation source and verification date. Matching is exact or uses the provider-prefixed catalog key. There is no guessed price for an unknown model.
+The OpenCode Go model overrides are kept separately in `pricing.json`: the documented price table for the Go model list, with its source and verification date. DeepSeek entries use off-peak rates, which double during peak hours; the note is stored with the table. An explicit zero rate marks a free model and is distinct from a missing price. Matching is exact or uses the provider-prefixed catalog key. There is no guessed price for an unknown model.
 
 Muse Spark 1.3 rates live in `muse-pricing.json` with their documentation source and verification date: per million tokens, Standard input $1.25, output $4.25, cached input $0.15; Contributor input $0.10, output $0.20, cached input $0.002. Muse records no per-request cost estimate, so unlike Grok there is no recorded figure to take precedence; catalog rates are the only source. This is the API-equivalent value, not subscription spending. No cache-write rate is published, so records with nonzero cache writes stay unpriced; Muse reasoning is recorded separately and excluded from value, as with Codex and Grok.
 
