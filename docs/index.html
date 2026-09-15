@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Usage Dashboard for Omarchy</title>
+<meta name="description" content="Token trends, named accounts, usage limits, and estimated API value for local coding agents. Includes an Omarchy bar widget that opens the full dashboard.">
+<meta property="og:title" content="AI Usage Dashboard for Omarchy">
+<meta property="og:description" content="Local token history, account comparisons, and a bar widget. Metrics stay on your machine.">
+<meta property="og:image" content="media/poster.jpg">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#111c18;--sf:#1a2820;--sf2:#23372b;--bd:#2c4036;--bds:#3d5648;
+  --ink:#c1c497;--ink2:#d7ddb8;--ink3:#8a9270;--acc:#509475;--acct:#8cd3cb;--gra:#111c18;
+  --max:1120px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans","Noto Sans","Segoe UI",system-ui,sans-serif;font-size:17px;line-height:1.55;-webkit-font-smoothing:antialiased}
+a{color:var(--acct);text-decoration:none}a:hover{text-decoration:underline}
+.wrap{max-width:var(--max);margin:0 auto;padding:0 24px}
+code,.mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}
+
+.nav{display:flex;align-items:center;justify-content:space-between;padding:22px 0}
+.brand{display:flex;align-items:center;gap:10px;font-weight:600;letter-spacing:.18em;font-size:13px;color:var(--ink2);text-transform:uppercase}
+.nav .links{display:flex;gap:22px;font-size:14px}
+.nav .links a{color:var(--ink3)}.nav .links a:hover{color:var(--ink2);text-decoration:none}
+.btn{display:inline-flex;align-items:center;gap:10px;padding:13px 22px;border-radius:4px;font-weight:600;font-size:15px;border:1px solid transparent;transition:.15s}
+.btn.acc{background:var(--acc);color:#0c1411}.btn.acc:hover{filter:brightness(1.08);text-decoration:none}
+.btn.ghost{border-color:var(--bds);color:var(--ink)}.btn.ghost:hover{background:var(--sf2);text-decoration:none;color:var(--ink2)}
+
+.hero{padding:64px 0 36px;display:grid;grid-template-columns:1.02fr .98fr;gap:48px;align-items:center}
+.k{font-size:12px;letter-spacing:.24em;font-weight:600;color:var(--acc);text-transform:uppercase;margin:0 0 18px;font-family:"IBM Plex Mono",monospace}
+h1{font-size:clamp(40px,5.6vw,68px);line-height:1.05;letter-spacing:-.02em;margin:0 0 20px;font-weight:600;color:var(--ink2)}
+.lead{font-size:19px;color:var(--ink);max-width:520px;margin:0 0 28px}
+.cta{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.cta small{color:var(--ink3);font-size:13px;width:100%;margin-top:4px}
+.video{position:relative;border-radius:6px;overflow:hidden;background:#000;border:1px solid var(--bd);box-shadow:0 24px 70px rgba(0,0,0,.45)}
+.video video{display:block;width:100%;height:auto}
+.vcap{color:var(--ink3);font-size:13px;margin:10px 0 0}
+
+.pillars{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:52px 0 0}
+.card{background:var(--sf);border:1px solid var(--bd);border-radius:6px;padding:24px}
+.card h3{margin:12px 0 8px;font-size:19px;color:var(--ink2);font-weight:600}
+.card p{margin:0;color:var(--ink3);font-size:15px}
+.dot{width:10px;height:10px;border-radius:1px;background:var(--acc)}
+
+section{padding:80px 0 0}
+h2{font-size:clamp(28px,3.6vw,40px);line-height:1.1;letter-spacing:-.02em;margin:0 0 12px;font-weight:600;color:var(--ink2)}
+.sub{color:var(--ink3);font-size:17px;max-width:640px;margin:0 0 32px}
+.feat{display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center;margin-top:36px}
+.feat.rev .shot{order:-1}
+.feat h3{font-size:24px;margin:0 0 10px;color:var(--ink2);font-weight:600}
+.feat p{color:var(--ink);margin:0 0 12px}
+.feat ul{margin:10px 0 0;padding-left:18px;color:var(--ink)}
+.feat li{margin:6px 0}
+.shot{border-radius:6px;overflow:hidden;border:1px solid var(--bd);background:var(--sf);box-shadow:0 18px 50px rgba(0,0,0,.35)}
+.shot img{display:block;width:100%;height:auto}
+.barwrap{background:var(--sf);border:1px solid var(--bd);border-radius:8px;padding:28px;display:grid;place-items:center}
+.barwrap img{max-width:360px;width:100%;height:auto}
+
+.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:32px}
+.step{background:var(--sf);border:1px solid var(--bd);border-radius:6px;padding:20px}
+.step .n{font-family:"IBM Plex Mono",monospace;color:var(--acct);font-size:12px;margin-bottom:10px}
+.step h4{margin:0 0 6px;font-size:16px;color:var(--ink2)}.step p{margin:0;color:var(--ink3);font-size:14px}
+
+.nums{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:32px}
+.num{background:var(--sf2);border-radius:6px;padding:20px;border:1px solid var(--bd)}
+.num b{display:block;font-size:30px;letter-spacing:-.02em;font-weight:600;color:var(--ink2)}
+.num span{color:var(--ink3);font-size:13.5px}
+
+table{width:100%;border-collapse:collapse;margin-top:32px;background:var(--sf);border:1px solid var(--bd);border-radius:6px;overflow:hidden}
+th,td{padding:14px 16px;text-align:left;border-bottom:1px solid var(--bd);font-size:15px;vertical-align:top}
+th{color:var(--ink3);font-weight:600;font-size:12px;letter-spacing:.12em;text-transform:uppercase;background:var(--sf2)}
+tr:last-child td{border-bottom:0}
+td.y{color:var(--ink2)}td.n{color:var(--ink3)}
+td:first-child{color:var(--ink);width:28%}
+.foot-note{color:var(--ink3);font-size:13.5px;margin-top:12px}
+
+pre{background:var(--sf);border:1px solid var(--bd);border-radius:6px;padding:18px 20px;overflow:auto;font-size:14px;line-height:1.6;color:var(--ink);margin:0}
+pre .c{color:var(--ink3)}pre .a{color:var(--acct)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:28px}
+.two h4{margin:0 0 10px;font-size:13px;letter-spacing:.14em;color:var(--ink3);text-transform:uppercase}
+
+footer{margin-top:88px;padding:36px 0 56px;border-top:1px solid var(--bd);color:var(--ink3);font-size:14px;display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
+
+@media (max-width:900px){
+  .hero{grid-template-columns:1fr;padding-top:32px}
+  .pillars,.flow,.nums,.two{grid-template-columns:1fr 1fr}
+  .feat{grid-template-columns:1fr}.feat.rev .shot{order:0}
+  .nav .links{display:none}
+}
+@media (max-width:560px){.pillars,.flow,.nums,.two{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="nav">
+    <a class="brand" href="#">AI usage</a>
+    <div class="links">
+      <a href="#how">How it works</a>
+      <a href="#screens">Screens</a>
+      <a href="#numbers">Numbers</a>
+      <a href="#compare">Compare</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/btsouth/omarchy-usage-dashboard">GitHub ↗</a>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div>
+      <p class="k">Omarchy · local metrics</p>
+      <h1>Token trends, named accounts, a bar widget.</h1>
+      <p class="lead">A local ledger for the coding agents on this PC. Processed tokens, API-value estimates, and the current login’s quota. Nothing is uploaded.</p>
+      <div class="cta">
+        <a class="btn acc" href="#install">Install</a>
+        <a class="btn ghost" href="https://github.com/btsouth/omarchy-usage-dashboard">View the code</a>
+        <small>Community project by Tyler South · MIT · Omarchy 4 with Quickshell</small>
+      </div>
+    </div>
+    <div>
+      <div class="video">
+        <video controls playsinline preload="metadata" poster="media/poster.jpg">
+          <source src="media/omarchy-usage-promo.mp4" type="video/mp4">
+        </video>
+      </div>
+      <p class="vcap">Recorded from <code>python3 demo.py</code> on an isolated bench, 15 Sep 2026. Narration: Lucas Oliveira, OmniVoice official profile. Screenshots use generated demo data, same as the README.</p>
+    </div>
+  </header>
+
+  <div class="pillars">
+    <div class="card"><div class="dot"></div><h3>Local token ledger</h3><p>Today, 7 / 30 / 90 day, and yearly views. Input, output, cache, and estimated API value. Sources appear when they have history.</p></div>
+    <div class="card"><div class="dot"></div><h3>Named accounts</h3><p>Label folders as Local or Work. Copied sessions count once. Conflicting labels are flagged. Labels are not logins.</p></div>
+    <div class="card"><div class="dot"></div><h3>Bar widget</h3><p>Limits and recent tokens in the Omarchy bar. Open analytics from the panel or the application menu. Same dashboard either way.</p></div>
+  </div>
+
+  <section id="how">
+    <h2>How it works</h2>
+    <p class="sub">The installer copies the app into your home directory. It never writes to <code>/usr/share/omarchy</code> and does not need sudo.</p>
+    <div class="flow">
+      <div class="step"><div class="n">01</div><h4>Scan local history</h4><p>Codex, Claude, Grok Build, Gemini CLI, OpenCode, Pi, Oh My Pi, and Muse folders already on disk.</p></div>
+      <div class="step"><div class="n">02</div><h4>Keep a metric ledger</h4><p>Counters, model names, project paths, session IDs, timestamps. Conversation bodies and credentials stay in their apps.</p></div>
+      <div class="step"><div class="n">03</div><h4>Price what you can</h4><p>Catalog rates or the app’s recorded estimate. Missing prices stay marked unpriced. This is not your bill.</p></div>
+      <div class="step"><div class="n">04</div><h4>Refresh on a timer</h4><p>History every 15 minutes, plus OpenCode Go and enabled Grok quota. Manual Refresh also asks Omarchy for Codex and Claude limits.</p></div>
+    </div>
+  </section>
+
+  <section id="screens">
+    <h2>The screens</h2>
+    <p class="sub">Every still is the real Quickshell UI, captured from the demo instance. The subtitle in the window says so.</p>
+
+    <div class="feat">
+      <div>
+        <h3>Trends</h3>
+        <p>Processed tokens for the selected period, with a daily (or hourly) chart per provider. Cache reuse is counted on every request. That is not unique text.</p>
+        <ul>
+          <li>Overview plus one tab per enabled source</li>
+          <li>Today, 7d, 30d, 90d, Year</li>
+          <li>Tokens or estimated API value</li>
+        </ul>
+      </div>
+      <div class="shot"><img src="media/overview.png" alt="Dashboard overview with 107.1 million processed tokens of demo data over seven days"></div>
+    </div>
+
+    <div class="feat rev">
+      <div>
+        <h3>Provider cards</h3>
+        <p>Each source shows tokens, API-value share, sessions, and the current login’s quota on this PC. Account-filtered views hide quota on purpose.</p>
+        <ul>
+          <li>Nine sources in this package</li>
+          <li>Grok model calls kept separate from usage records</li>
+          <li>Unpriced tokens stay visible</li>
+        </ul>
+      </div>
+      <div class="shot"><img src="media/providers.png" alt="Codex and Claude provider cards with demo quota meters"></div>
+    </div>
+
+    <div class="feat">
+      <div>
+        <h3>Account filter</h3>
+        <p>Work versus Local in the demo: 53.5M tokens on Work against 107.1M on all accounts. Folders must already be mounted. The dashboard does not sync another machine.</p>
+        <ul>
+          <li>Stable event IDs deduplicate copies</li>
+          <li>Conflicts land in Needs review</li>
+          <li>History labels are not verified identities</li>
+        </ul>
+      </div>
+      <div class="shot"><img src="media/accounts.png" alt="Work account filter showing 53.5 million processed tokens of demo data"></div>
+    </div>
+
+    <div class="feat rev">
+      <div>
+        <h3>Settings</h3>
+        <p>Enable providers, set optional monthly plan prices, and point at extra history folders. Credentials stay in Codex, Claude, Grok, Muse, and OpenCode.</p>
+        <ul>
+          <li>Local account name plus extra named accounts</li>
+          <li>Window opacity preview before save</li>
+          <li>Paths in this still are the isolated demo home</li>
+        </ul>
+      </div>
+      <div class="shot"><img src="media/settings.png" alt="Preferences with visible providers, opacity, and a Work account pointing at demo folders"></div>
+    </div>
+
+    <div class="feat">
+      <div>
+        <h3>Bar widget</h3>
+        <p>The plugin panel is the same QML shipped in <code>plugin/Panel.qml</code>. This still is that panel, hosted in an isolated Quickshell window because the Omarchy shell itself is Wayland. Demo quota snapshots are labeled as demo on this page.</p>
+        <ul>
+          <li>Open analytics launches the full dashboard</li>
+          <li>Provider chips wrap when many sources are enabled</li>
+          <li>Install with <code>--with-plugin</code>, then drop the built-in Agents widget if you want a single icon</li>
+        </ul>
+      </div>
+      <div class="barwrap"><img src="media/bar.png" alt="Omarchy bar widget panel showing Claude Pro limits and tokens by day from demo data"></div>
+    </div>
+  </section>
+
+  <section id="numbers">
+    <h2>Measured numbers</h2>
+    <p class="sub">Demo ledger generated 15 Sep 2026 by the same seed as <code>demo.py</code> (random seed 7, seven days, all nine providers). Not a live login.</p>
+    <div class="nums">
+      <div class="num"><b>107.1M</b><span>processed tokens / 7 days</span></div>
+      <div class="num"><b>264</b><span>sessions · 1,898 usage records</span></div>
+      <div class="num"><b>96.9%</b><span>cached input reused</span></div>
+      <div class="num"><b>$25.90</b><span>estimated API value, 100% priced</span></div>
+    </div>
+    <p class="foot-note">Known cache savings in that demo view: $62.30. Work filter: 53.5M tokens, 255 sessions. Collector report written to the isolated demo home on 15 Sep 2026. Product facts below are from the tree, not from that ledger. Tests: <code>python3 -m unittest discover -s tests -v</code> (58 OK). Plugin default <code>refreshIntervalSec</code> is 900.</p>
+    <div class="nums">
+      <div class="num"><b>9</b><span>history sources in this package</span></div>
+      <div class="num"><b>6</b><span>breakdowns: models, projects, clients, routes, accounts, sessions</span></div>
+      <div class="num"><b>15 min</b><span>default refresh (plugin 900s)</span></div>
+      <div class="num"><b>58</b><span>unit tests passing, 15 Sep 2026</span></div>
+    </div>
+    <p class="foot-note">Pricing snapshot: LiteLLM subset revision <code>51514b9</code>, fetched 5 Sep 2026. OpenCode Go override verified 5 Sep 2026 against <a href="https://opencode.ai/docs/go/#usage-limits">opencode.ai/docs/go</a>. Muse Spark 1.3 rates verified 7 Sep 2026 via <a href="https://docs.litellm.ai/blog/muse_spark_1_3">LiteLLM’s Muse note</a>. Gemini 3.8 Flash standard rates checked against <a href="https://ai.google.dev/gemini-api/docs/pricing">Google’s pricing page</a> on 5 Sep 2026 ($0.75 input, $3.75 output, $0.075 cache reads per million); those promotional rates end 31 Dec 2026.</p>
+  </section>
+
+  <section id="compare">
+    <h2>Compared with nearby tools</h2>
+    <p class="sub">Checked 15 Sep 2026. This is a local Omarchy GUI, not a cloud bill and not a CLI report runner.</p>
+    <table>
+      <thead>
+        <tr><th></th><th>AI Usage Dashboard</th><th>Omarchy Agents widget</th><th>ccusage</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Where it lives</td>
+          <td class="y">Omarchy app + optional bar plugin</td>
+          <td class="y">Built-in bar widget</td>
+          <td class="y">CLI, optional web viewers</td>
+        </tr>
+        <tr>
+          <td>Token ledger</td>
+          <td class="y">Period charts, totals, cache split, sessions</td>
+          <td class="n">Recent-day sparkline of token counts, not a full ledger</td>
+          <td class="y">Daily / weekly / monthly / session reports</td>
+        </tr>
+        <tr>
+          <td>Named folder accounts</td>
+          <td class="y">Local / Work style labels, dedup, conflict flag</td>
+          <td class="n">No account filter</td>
+          <td class="n">Multi-file labels in viewers; not Omarchy account folders</td>
+        </tr>
+        <tr>
+          <td>Quota on this PC</td>
+          <td class="y">Codex/Claude from Omarchy snapshots; Grok, Go, Muse from existing logins</td>
+          <td class="y">That is the widget’s job</td>
+          <td class="n">No Omarchy quota snapshots</td>
+        </tr>
+        <tr>
+          <td>API-value estimate</td>
+          <td class="y">Catalog or recorded estimate; unpriced stays unpriced</td>
+          <td class="n">No pricing</td>
+          <td class="y">Cost estimates from local usage</td>
+        </tr>
+        <tr>
+          <td>Sources in-tree, 15 Sep 2026</td>
+          <td class="y">9 coding-agent histories listed in the README</td>
+          <td class="n">Agents that Omarchy already tracks</td>
+          <td class="y">Broader CLI list, including tools this package does not claim</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="foot-note">Agents widget: this repo’s README (“Using it instead of the built-in widget”) and <code>plugin/manifest.json</code> <code>clonedFrom: omarchy.agents</code>. ccusage: <a href="https://ccusage.com/guide/">ccusage.com/guide</a>, retrieved 15 Sep 2026 (Claude Code, Codex, OpenCode, Gemini CLI, Grok Build CLI, and others). This page does not claim Cursor, Copilot, Windsurf, or Antigravity coverage; see <a href="provider-coverage.md">provider coverage</a>.</p>
+  </section>
+
+  <section id="install">
+    <h2>Install</h2>
+    <p class="sub">Omarchy 4, Quickshell, Python 3.11+, systemd user session. Older Waybar setups are not supported.</p>
+    <div class="two">
+      <div>
+        <h4>Dashboard + bar widget</h4>
+        <pre><span class="c"># from a clone of this repo</span>
+git clone https://github.com/btsouth/omarchy-usage-dashboard.git
+cd omarchy-usage-dashboard
+python3 install.py --with-plugin</pre>
+      </div>
+      <div>
+        <h4>Dashboard only</h4>
+        <pre>python3 install.py
+~/.local/bin/omarchy-usage-dashboard</pre>
+      </div>
+    </div>
+    <p class="foot-note" style="margin-top:22px">If the new icon does not appear: <code>omarchy-shell shell rescanPlugins</code>. To use it instead of Agents, remove Agents from the bar layout after install. Uninstall with <code>python3 install.py --uninstall</code> after quitting the dashboard (Ctrl+Q). History and preferences remain. Details: <a href="installation.md">installation</a>, <a href="accounts.md">accounts</a>, <a href="pricing.md">pricing</a>.</p>
+  </section>
+
+  <footer>
+    <div>MIT · Copyright 2026 Tyler South and contributors · Independent community project. Bar widget adapted from Omarchy’s Agents plugin. Pricing snapshot from LiteLLM.</div>
+    <div><a href="https://github.com/btsouth/omarchy-usage-dashboard">github.com/btsouth/omarchy-usage-dashboard</a></div>
+  </footer>
+</div>
+</body>
+</html>
