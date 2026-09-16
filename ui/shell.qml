@@ -77,7 +77,7 @@ Scope {
         var raw = ({codex: palette.bright_cyan || "#8cd3cb", claude: palette.bright_red || "#db9f9c",
             "opencode-go": palette.bright_yellow || "#e5c736", grok: palette.bright_blue || "#9cb8db",
             gemini: palette.bright_magenta || "#c6a0d5", opencode: palette.bright_green || "#a7c080",
-            pi: palette.bright_white || "#d4d4d4", omp: palette.red || "#d88b68",
+            pi: palette.bright_white || palette.bright_foreground || "#d4d4d4", omp: palette.red || "#d88b68",
             muse: palette.blue || "#7aa2f7"})[id] || root.ink
         var color=Qt.darker(raw,1), background=luminance(root.base)
         for (var i=0;i<16;i++) {
