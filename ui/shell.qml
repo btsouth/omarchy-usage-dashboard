@@ -50,6 +50,8 @@ Scope {
     property var draftHomes: ({})
     property var draftAccounts: []
     property string draftLocalLabel: "Local"
+    property string draftLedgerSyncDir: ""
+    property string draftLedgerDeviceId: ""
     property string saveError: ""
     property var homeOptions: [
         {key:"codexHomes",name:"Codex homes",example:"/mnt/other-computer/.codex"},
@@ -126,6 +128,8 @@ Scope {
         draftEnabled = (s.enabled || ["codex", "claude", "opencode-go"]).slice()
         draftAccounts = JSON.parse(JSON.stringify(s.accounts || []))
         draftLocalLabel = s.localAccountLabel || "Local"
+        draftLedgerSyncDir = s.ledgerSyncDir || ""
+        draftLedgerDeviceId = s.ledgerDeviceId || ""
         var prices = {}, homes = {}
         providerOptions.forEach(p => prices[p.id] = s.monthlyPrices && s.monthlyPrices[p.id] !== undefined ? String(s.monthlyPrices[p.id]) : "")
         draftAccounts.forEach(a => prices[a.id] = s.monthlyPrices && s.monthlyPrices[a.id] !== undefined ? String(s.monthlyPrices[a.id]) : "")
@@ -145,7 +149,8 @@ Scope {
             prices[p] = n
         }
         saveError = ""
-        var s = {accounts: draftAccounts, localAccountLabel: draftLocalLabel, enabled: draftEnabled, monthlyPrices: prices, windowOpacity: opacitySlider.value}
+        var s = {accounts: draftAccounts, localAccountLabel: draftLocalLabel, enabled: draftEnabled, monthlyPrices: prices, windowOpacity: opacitySlider.value,
+                 ledgerSyncDir: draftLedgerSyncDir, ledgerDeviceId: draftLedgerDeviceId}
         homeOptions.forEach(h => s[h.key] = (draftHomes[h.key] || "").split("\n").filter(x => x.trim()).map(x => x.trim()))
         save.command = ["python3", helper, "settings", "--save", JSON.stringify(s)]
         save.running = true
@@ -413,8 +418,13 @@ Scope {
                                 Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.data ? root.compact(root.data.summary.output)+" output tokens, including reasoning" : "" }
                                 Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.metric === "tokens" ? "Processed tokens count reused context on every request. This is not a count of unique text." : "Catalog rates or the app’s recorded API estimate. This is not your bill." }
                             }
-                        }
-                        Card {
+                    }
+                    Label { text: "Synced machines"; font.pixelSize: 16 }
+                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Point every machine at one synced folder. Each writes its own ledger snapshot and imports the others, so totals, charts, heatmap, and model breakdowns cover all of them. Only token counters and names are shared; prompts, paths outside the ledger, and credentials stay local." }
+                    Field { width: parent.width; text: root.draftLedgerSyncDir; placeholderText: "Shared folder, e.g. ~/Sync/ai-usage"; onTextEdited: root.draftLedgerSyncDir = text; Accessible.name: "Synced ledger folder" }
+                    Field { width: 260; text: root.draftLedgerDeviceId; placeholderText: "Device id, e.g. desktop"; onTextEdited: root.draftLedgerDeviceId = text; Accessible.name: "Synced ledger device id" }
+                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "The device id names this machine's snapshot ("+(root.draftLedgerDeviceId||"hostname")+".sqlite). Leave it blank to use the hostname. Other machines appear as extra accounts you can filter." }
+                    Card {
                             Layout.fillWidth: true; Layout.fillHeight: true; implicitHeight: 248
                             ColumnLayout {
                                 anchors.fill: parent; anchors.margins: 18; spacing: 10

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Synced machine ledgers: point every machine at one shared folder and each imports the others' snapshots, so totals, charts, and model breakdowns cover all of them.
+
 ## 1.0.0 - 2026-09-15
 
 - Named history accounts with multiple folders, account comparisons, and filters.

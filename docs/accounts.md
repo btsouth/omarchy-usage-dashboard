@@ -22,6 +22,12 @@ Stable event IDs deduplicate copied sessions across folders. Multiple copies und
 
 The ledger retains previously recorded usage after source files disappear. Older records whose source cannot be recovered during migration appear as **Unassigned history**. They remain in overall totals. Removing an account label keeps its history and returns its known source paths to the local group unless another configured account matches them. Unlabelled additional folders also belong to the local group.
 
+## Synced machines
+
+Under **Settings → Synced machines**, point every machine at the same folder (Syncthing, Dropbox, a network share) and give each one a device id, for example `desktop` and `laptop`. Each machine writes a consistent snapshot of its ledger to `<device>.sqlite` in that folder and imports the other snapshots during its normal scan. Events keep their stable ids, so a history indexed on more than one machine counts once, and local provenance wins over an imported copy. Imported activity appears under a `machine:<device>` account that you can filter, price, or ignore like any other account.
+
+Snapshots carry token counters, model and project names, session ids, and timestamps, the same fields the local ledger stores. They do not carry prompts, response bodies, credentials, or file contents. Quota stays tied to the current login on each machine; imported accounts do not show limits. Snapshots are written with SQLite's `VACUUM INTO`, so a sync client never copies a half-written database. Remove the folder setting to stop syncing; imported events remain in the ledger.
+
 ## Limits and comparisons
 
 History labels are not verified login identities. The local card shows the current login's quota on this PC, with its scope stated. A labelled account also shows limits when an agent usage record under `~/.local/state/omarchy/agents/usage/` has the same record id as the account, or the same name as the account label; its card says where the numbers came from. Accounts without their own record keep the current-login note. This version does not switch authentication or fetch every account's limits.

@@ -54,6 +54,7 @@ Both install options run without sudo and keep working if you move or delete the
 - Input, output, and cache totals, estimated API value, and provider comparisons.
 - Breakdowns by model, project, client, model provider, account, and session.
 - Named accounts with multiple history folders and deduplication of copied records.
+- Synced machine ledgers: one shared folder, with each machine importing the others so all stats appear in one dashboard.
 - Available usage limits, optional monthly plan comparisons, and Omarchy theme colors.
 
 ## Supported sources

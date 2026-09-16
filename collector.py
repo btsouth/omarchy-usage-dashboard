@@ -28,7 +28,8 @@ PROVIDERS = {'codex': 'Codex', 'claude': 'Claude', 'opencode-go': 'OpenCode Go',
              'gemini': 'Gemini CLI', 'opencode': 'OpenCode', 'pi': 'Pi', 'omp': 'Oh My Pi', 'muse': 'Muse'}
 HOME_KEYS = ('codexHomes', 'claudeHomes', 'grokHomes', 'geminiHomes', 'opencodeHomes', 'piHomes', 'ompHomes', 'museHomes')
 DEFAULTS = {'enabled': ['codex', 'claude', 'opencode-go'], 'monthlyPrices': {},
-            **{key: [] for key in HOME_KEYS}, 'accounts': [], 'localAccountLabel': 'Local', 'windowOpacity': 0.985}
+            **{key: [] for key in HOME_KEYS}, 'accounts': [], 'localAccountLabel': 'Local', 'windowOpacity': 0.985,
+            'ledgerSyncDir': '', 'ledgerDeviceId': ''}
 FIELDS = ('input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h', 'reasoning')
 # Bundled official rate tables merged over the catalog, in order. User
 # rates.json entries still win over every file listed here.
@@ -73,7 +74,11 @@ def save_settings(value):
     clean = {'enabled': [p for p in value.get('enabled', []) if p in PROVIDERS],
              'monthlyPrices': {}, **{key: [] for key in HOME_KEYS},
              'accounts': [], 'localAccountLabel': str(value.get('localAccountLabel') or 'Local').strip(),
+             'ledgerSyncDir': '', 'ledgerDeviceId': str(value.get('ledgerDeviceId') or '').strip(),
              'windowOpacity': max(0.55, min(1.0, float(value.get('windowOpacity', 0.985))))}
+    if str(value.get('ledgerSyncDir') or '').strip():
+        clean['ledgerSyncDir'] = str(Path(str(value['ledgerSyncDir'])).expanduser().absolute())
+    if len(clean['ledgerDeviceId']) > 80: raise ValueError('Give the ledger device id 80 characters or fewer.')
     for key in HOME_KEYS:
         clean[key] = sorted({str(Path(p).expanduser().absolute()) for p in value.get(key, []) if str(p).strip()})
     if not clean['localAccountLabel'] or len(clean['localAccountLabel']) > 80: raise ValueError('Give the local history group a name of 1 to 80 characters.')
@@ -401,6 +406,66 @@ class Ledger:
         if source is not None:
             self.db.execute('INSERT OR IGNORE INTO event_sources VALUES (?,?)', (r['id'], str(source)))
 
+    def sync_ledgers(self, cfg):
+        # Each machine writes a consistent ledger snapshot (VACUUM INTO) to a
+        # shared folder and imports the other snapshots. Event ids deduplicate;
+        # local provenance always wins over a machine-prefixed copy.
+        directory = str(cfg.get('ledgerSyncDir') or '').strip()
+        if not directory: return []
+        directory = Path(directory).expanduser()
+        device = str(cfg.get('ledgerDeviceId') or '').strip() or socket.gethostname()
+        warnings = []
+        try: directory.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return ['Could not create the synced ledger folder.']
+        snapshot = directory / (device + '.sqlite')
+        signature = list(self.db.execute('SELECT COUNT(*),COALESCE(MAX(ts),0),COALESCE(SUM(input+output+cacheRead+cacheWrite),0) FROM events').fetchone())
+        stored = self.db.execute("SELECT value FROM metadata WHERE key='ledgerSignature'").fetchone()
+        if not stored or stored[0] != json.dumps(signature):
+            temporary = directory / ('.' + device + '.tmp.sqlite')
+            try:
+                if temporary.exists(): temporary.unlink()
+                self.db.commit()
+                self.db.execute('VACUUM INTO ?', (str(temporary),))
+                os.chmod(temporary, 0o600)
+                os.replace(temporary, snapshot)
+                self.db.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)', ('ledgerSignature', json.dumps(signature)))
+            except (OSError, sqlite3.Error):
+                warnings.append('Could not write the synced ledger snapshot.')
+                if temporary.exists(): temporary.unlink(missing_ok=True)
+        for path in sorted(directory.glob('*.sqlite')):
+            if path.name == device + '.sqlite': continue
+            try:
+                stat = path.stat()
+                if self.db.execute('SELECT size,mtime FROM files WHERE path=?', (str(path),)).fetchone() == (stat.st_size, stat.st_mtime_ns): continue
+                self.import_ledger(path, path.stem)
+                self.db.execute('INSERT OR REPLACE INTO files VALUES (?,?,?)', (str(path), stat.st_size, stat.st_mtime_ns))
+            except (OSError, sqlite3.Error, ValueError, TypeError, KeyError):
+                warnings.append('Could not read synced ledger ' + path.name)
+        self.db.commit()
+        return warnings
+
+    def import_ledger(self, path, device):
+        ours = {row[1] for row in self.db.execute('PRAGMA table_info(events)')}
+        conn = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=3)
+        try:
+            conn.row_factory = sqlite3.Row
+            columns = {row[1] for row in conn.execute('PRAGMA table_info(events)')}
+            if not {'id', 'provider', 'session', 'ts', 'model', 'project', 'client', *FIELDS} <= columns:
+                raise ValueError('Not a usage ledger')
+            for row in conn.execute('SELECT * FROM events'):
+                self.put({key: row[key] for key in row.keys() if key in ours}, None)
+            try: sources = list(conn.execute('SELECT event_id,path FROM event_sources'))
+            except sqlite3.Error: sources = []
+            for event, original in sources:
+                # Keep one provenance per event so imported copies cannot
+                # conflict with a local account or another machine.
+                self.db.execute('INSERT INTO event_sources(event_id,path) SELECT ?,? '
+                                'WHERE NOT EXISTS (SELECT 1 FROM event_sources WHERE event_id=?)',
+                                (event, f'machine:{device}/{original}', event))
+        finally:
+            conn.close()
+
     def scan(self, cfg):
         cfg = dict(cfg)
         for account in cfg.get('accounts', []):
@@ -477,6 +542,7 @@ class Ledger:
                         source['readErrors'] = source.get('readErrors', 0) + 1
         for source in sources:
             source['status'] = 'missing' if not source['exists'] else 'partial' if source.get('readErrors') else 'available'
+        warnings.extend(self.sync_ledgers(cfg))
         meta = {'sources': sources, 'warnings': warnings, 'scannedAt': time.time(), 'machine': 'demo-computer' if os.getenv('AI_USAGE_DEMO') == '1' else socket.gethostname()}
         self.db.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)', ('scan', json.dumps(meta)))
         self.db.commit()
@@ -782,13 +848,18 @@ def account_assignments(ledger, cfg):
         for directory in account['directories']:
             roots.append((directory['provider'], Path(directory['path']).expanduser().resolve(), account['id']))
     roots.sort(key=lambda item: len(item[1].parts), reverse=True)
-    cache, assignments = {}, {}
+    cache, assignments, machines = {}, {}, set()
     for event, provider, path in ledger.db.execute('SELECT e.id,e.provider,s.path FROM events e JOIN event_sources s ON s.event_id=e.id'):
         key = (provider, path)
         if key not in cache:
             source = Path(path)
-            cache[key] = next((aid for p, root, aid in roots if p == provider and source.is_relative_to(root)), 'local')
+            match = next((aid for p, root, aid in roots if p == provider and source.is_relative_to(root)), None)
+            if match is None and str(path).startswith('machine:'):
+                match = str(path).split('/', 1)[0]
+                machines.add(match)
+            cache[key] = match or 'local'
         assignments.setdefault(event, set()).add(cache[key])
+    for aid in sorted(machines): labels[aid] = aid.split(':', 1)[1]
     resolved = {}
     for event, ids in assignments.items():
         named = ids - {'local'}

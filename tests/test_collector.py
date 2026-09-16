@@ -512,6 +512,37 @@ class CollectorTests(unittest.TestCase):
             self.assertEqual(config['ompHomes'], ['/mounted/.omp/agent'])
             self.assertEqual(config['enabled'], list(c.PROVIDERS))
 
+    def test_ledger_sync_settings_validate(self):
+        with patch.object(c, 'CONFIG', self.root / 'settings.json'):
+            config = c.save_settings(c.DEFAULTS | {'ledgerSyncDir': '~/Sync/ai-usage', 'ledgerDeviceId': 'desk'})
+            self.assertEqual(config['ledgerSyncDir'], str(Path('~/Sync/ai-usage').expanduser().absolute()))
+            self.assertEqual(config['ledgerDeviceId'], 'desk')
+            with self.assertRaisesRegex(ValueError, 'device id'):
+                c.save_settings(c.DEFAULTS | {'ledgerDeviceId': 'x' * 81})
+
+    def test_synced_ledgers_export_import_and_dedupe(self):
+        sync = self.root / 'sync'
+        local = c.Ledger(self.root / 'state/usage.sqlite')
+        remote = c.Ledger(sync / 'laptop.sqlite')
+        remote.put(c.record('shared', 'codex', 's1', '2026-09-04T12:00:00Z', 'gpt-4.1', '/project', 'CLI', input=100), '/laptop/shared.jsonl')
+        remote.put(c.record('remote-only', 'claude', 's2', '2026-09-04T13:00:00Z', 'claude-x', '/project', 'Claude Code', input=50), '/laptop/only.jsonl')
+        remote.db.commit()
+        local_path = str(self.root / 'local.jsonl')
+        local.put(c.record('shared', 'codex', 's1', '2026-09-04T12:00:00Z', 'gpt-4.1', '/project', 'CLI', input=100), local_path)
+        cfg = c.DEFAULTS | {'enabled': ['codex', 'claude'], 'ledgerSyncDir': str(sync), 'ledgerDeviceId': 'desk'}
+        self.assertEqual(local.sync_ledgers(cfg), [])
+        self.assertTrue((sync / 'desk.sqlite').exists())
+        self.assertEqual(local.db.execute('SELECT COUNT(*) FROM events').fetchone()[0], 2)
+        labels, resolved = c.account_assignments(local, cfg)
+        self.assertEqual(labels['machine:laptop'], 'laptop')
+        self.assertEqual(resolved['remote-only'], 'machine:laptop')
+        self.assertEqual(resolved['shared'], 'local')
+        self.assertEqual([row[0] for row in local.db.execute('SELECT path FROM event_sources WHERE event_id=?', ('shared',))], [local_path])
+        # Unchanged snapshots are not imported twice.
+        self.assertEqual(local.sync_ledgers(cfg), [])
+        self.assertEqual(local.db.execute('SELECT COUNT(*) FROM events').fetchone()[0], 2)
+        local.db.close(); remote.db.close()
+
     def test_account_prices_save_and_unknown_price_keys_drop(self):
         with patch.object(c, 'CONFIG', self.root / 'settings.json'):
             config = c.save_settings(c.DEFAULTS | {'enabled': ['codex'], 'monthlyPrices': {'codex': 200, 'work': 20, 'ghost': 5},
