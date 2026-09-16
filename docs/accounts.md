@@ -14,7 +14,7 @@ Open Settings, name the default local history group if needed, then choose **Add
 
 An account can combine Codex, Claude, and other source folders. OpenCode and OpenCode Go need separate source entries to label both sets of routes in the same database. Folders must already be available locally or mounted. No remote sync or credentials are configured here. Missing folders appear in source coverage and can be connected later.
 
-The account filter applies to charts, totals, and breakdowns. When a provider has more than one account, the daily and hourly charts draw one series per account: the largest account solid, the others dashed, each labelled in the hover card. The overview shows one card per account, and the Accounts table compares account/source pairs and opens their recorded sessions. Renaming an account changes its label without reimporting tokens.
+The account filter applies to charts, totals, and breakdowns. When a provider has more than one account, the daily and hourly charts draw one series per account in its own shade of the provider color: the largest account solid, the others dashed, each labelled in the hover card. The overview shows one card per account, and the Accounts table compares account/source pairs and opens their recorded sessions. Renaming an account changes its label without reimporting tokens.
 
 ## Copies and retained history
 

@@ -866,7 +866,7 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
         if provider != 'all' and p != provider: continue
         group = sorted(((aid, bucket) for (card_provider, aid), bucket in accounts.items() if card_provider == p),
                        key=lambda item: item[1]['tokens'], reverse=True)
-        for aid, account_bucket in group:
+        for shade, (aid, account_bucket) in enumerate(group):
             fin = finish(account_bucket)
             if aid == 'local':
                 name = PROVIDERS[p] + (' · ' + labels['local'] if p in named_providers else '')
@@ -880,6 +880,7 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
                 monthly = cfg['monthlyPrices'].get(aid)
                 card_quota, scope = {'limits': [], 'error': 'Quota is shown for the current login only.'}, ''
             cards.append(fin | {'id': p + ':' + aid, 'provider': p, 'accountId': aid, 'name': name, 'monthlyPrice': monthly,
+                                'shade': shade, 'shades': len(group),
                                 'quota': card_quota, 'quotaScope': scope,
                                 'valueShare': 100 * fin['value'] / summary['value'] if summary['value'] else None})
     # Model-level allowance for Go. The quota endpoint reports only aggregate

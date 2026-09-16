@@ -92,6 +92,8 @@ class AccountTests(unittest.TestCase):
         self.assertEqual(today['cards']['codex:work']['tokens'], 100)
         self.assertEqual(today['cards']['codex:local']['tokens'], 50)
         self.assertEqual([card['id'] for card in data['cards']], ['codex:personal', 'codex:work', 'codex:local'])
+        self.assertEqual([card['shade'] for card in data['cards']], [0, 1, 2])
+        self.assertEqual([card['shades'] for card in data['cards']], [3, 3, 3])
         hourly = self.report(days=1)['hourly']
         self.assertEqual(sum(h['providers']['codex']['tokens'] for h in hourly), 450)
         self.assertEqual(sum(h['cards'].get('codex:personal', {}).get('tokens', 0) for h in hourly), 300)

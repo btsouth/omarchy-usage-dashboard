@@ -13,7 +13,7 @@
 - Keep provider colors readable on light and dark backgrounds.
 - Wrap bar-widget provider chips when many sources are enabled.
 - One overview card per account, with optional monthly prices per provider or labelled account.
-- Daily and hourly charts split into one series per account when a provider has more than one, with the largest solid and the others dashed.
+- Daily and hourly charts split into one series per account when a provider has more than one, each in its own shade of the provider color, largest solid and the others dashed.
 - OpenCode Go prices the full documented model table, doubles DeepSeek rates during peak hours, and falls back to OpenCode's recorded cost for unlisted models.
 - The Go card shows value used against each model's monthly allowance, including the DeepSeek V4.1 Flash 4x promo through Sep 20.
 - Price Codex `gpt-5.3-codex-spark` and mark `codex-auto-review` internal, clearing the missing-price warning.

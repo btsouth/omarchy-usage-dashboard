@@ -66,16 +66,16 @@ Scope {
         ;(account.directories || []).forEach(d => { var n = providerName(d.provider); if (names.indexOf(n) < 0) names.push(n) })
         return names.join(" + ")
     }
+    function luminance(c) {
+        function linear(v) { return v <= 0.04045 ? v/12.92 : Math.pow((v+0.055)/1.055,2.4) }
+        return 0.2126*linear(c.r)+0.7152*linear(c.g)+0.0722*linear(c.b)
+    }
     function colorFor(id) {
         var raw = ({codex: palette.bright_cyan || "#8cd3cb", claude: palette.bright_red || "#db9f9c",
             "opencode-go": palette.bright_yellow || "#e5c736", grok: palette.bright_blue || "#9cb8db",
             gemini: palette.bright_magenta || "#c6a0d5", opencode: palette.bright_green || "#a7c080",
             pi: palette.bright_white || "#d4d4d4", omp: palette.red || "#d88b68",
             muse: palette.blue || "#7aa2f7"})[id] || root.ink
-        function luminance(c) {
-            function linear(v) { return v <= 0.04045 ? v/12.92 : Math.pow((v+0.055)/1.055,2.4) }
-            return 0.2126*linear(c.r)+0.7152*linear(c.g)+0.0722*linear(c.b)
-        }
         var color=Qt.darker(raw,1), background=luminance(root.base)
         for (var i=0;i<16;i++) {
             var value=luminance(color)
@@ -83,6 +83,12 @@ Scope {
             color=background>0.179 ? Qt.darker(color,1.15) : Qt.lighter(color,1.15)
         }
         return color
+    }
+    function accountColor(provider, shade) {
+        var base = colorFor(provider)
+        if (!shade) return base
+        var factor = 1 + 0.3 * shade
+        return luminance(root.base) > 0.179 ? Qt.darker(base, factor) : Qt.lighter(base, factor)
     }
     function compact(n) {
         n = Number(n || 0)
@@ -441,12 +447,6 @@ Scope {
                                             return
                                         }
                                         var cards=root.data ? root.data.cards : [], ids=cards.map(c=>c.id), max=1
-                                        var pos=[]
-                                        for (var ci=0; ci<cards.length; ci++) {
-                                            var before=0, total=0
-                                            for (var cj=0; cj<cards.length; cj++) if (cards[cj].provider===cards[ci].provider) { total++; if (cj<ci) before++ }
-                                            pos.push({before:before, total:total})
-                                        }
                                         for (var d of series) for (var id of ids) max=Math.max(max,root.amount(d.cards[id]))
                                         ctx.font="10px \""+root.fontFamily+"\""; ctx.lineWidth=1
                                         for(var t=0;t<3;t++) {
@@ -460,8 +460,8 @@ Scope {
                                                 var center=left+group*(i+0.5), totalWidth=ids.length*bw+(ids.length-1)*gap
                                                 for(var j=0;j<ids.length;j++) {
                                                     var barHeight=root.amount(series[i].cards[ids[j]])/max*(bottom-top)
-                                                    var barAlpha=pos[j].before===0?0.8:pos[j].before===1?0.55:0.38
-                                                    ctx.fillStyle=Qt.alpha(root.colorFor(cards[j].provider),hovered===i?1:barAlpha)
+                                                    var barAlpha=cards[j].shade===0?0.8:cards[j].shade===1?0.55:0.38
+                                                    ctx.fillStyle=Qt.alpha(root.accountColor(cards[j].provider,cards[j].shade),hovered===i?1:barAlpha)
                                                     ctx.fillRect(center-totalWidth/2+j*(bw+gap),bottom-barHeight,bw,barHeight)
                                                 }
                                                 if(series.length<=8 || i%3===0 || i===series.length-1) {
@@ -476,11 +476,11 @@ Scope {
                                                     var yy=bottom-root.amount(series[i].cards[ids[k]])/max*(bottom-top)
                                                     if(i===0)ctx.moveTo(x,yy);else ctx.lineTo(x,yy)
                                                 }
-                                                ctx.strokeStyle=root.colorFor(cards[k].provider);ctx.lineWidth=pos[k].before===0?2.3:1.8
-                                                ctx.setLineDash(pos[k].total>1 && pos[k].before>0 ? (pos[k].before===1?[5,4]:[2,2]) : [])
+                                                ctx.strokeStyle=root.accountColor(cards[k].provider,cards[k].shade);ctx.lineWidth=cards[k].shade===0?2.3:1.8
+                                                ctx.setLineDash(cards[k].shades>1 && cards[k].shade>0 ? (cards[k].shade===1?[5,4]:[2,2]) : [])
                                                 ctx.stroke();ctx.setLineDash([])
-                                                if(series.length===1){ctx.beginPath();ctx.arc(x,yy,4,0,2*Math.PI);ctx.fillStyle=root.colorFor(cards[k].provider);ctx.fill()}
-                                                else if(ids.length <= 3 && pos[k].before===0) {ctx.lineTo(left+plot,bottom);ctx.lineTo(left,bottom);ctx.closePath();ctx.fillStyle=Qt.alpha(root.colorFor(cards[k].provider),0.07);ctx.fill()}
+                                                if(series.length===1){ctx.beginPath();ctx.arc(x,yy,4,0,2*Math.PI);ctx.fillStyle=root.accountColor(cards[k].provider,cards[k].shade);ctx.fill()}
+                                                else if(ids.length <= 3 && cards[k].shade===0) {ctx.lineTo(left+plot,bottom);ctx.lineTo(left,bottom);ctx.closePath();ctx.fillStyle=Qt.alpha(root.accountColor(cards[k].provider,cards[k].shade),0.07);ctx.fill()}
                                             }
                                             ctx.fillStyle=root.muted
                                             if(series.length){ctx.fillText(series[0].date.slice(5),left,h-5);ctx.fillText(series[series.length-1].date.slice(5),w-42,h-5)}
@@ -502,7 +502,7 @@ Scope {
                                         x: chart.pointerX > chart.width/2 ? 48 : Math.max(0,chart.width-width-12)
                                         y: 16
                                         heading: chart.hovered>=0 && chart.hovered<chart.series.length ? (chart.hourly ? chart.series[chart.hovered].title : Qt.formatDate(new Date(chart.series[chart.hovered].date+"T12:00:00"),"dddd, MMM d")) : ""
-                                        rows: chart.hovered>=0 && chart.hovered<chart.series.length && root.data ? root.data.cards.map(c=>({label:c.name,value:root.display(chart.series[chart.hovered].cards[c.id]),color:root.colorFor(c.provider)})) : []
+                                        rows: chart.hovered>=0 && chart.hovered<chart.series.length && root.data ? root.data.cards.map(c=>({label:c.name,value:root.display(chart.series[chart.hovered].cards[c.id]),color:root.accountColor(c.provider,c.shade)})) : []
                                         detail: (chart.hourly ? "This hour · " : "") + (root.metric === "tokens" ? "Processed tokens, including cached input" : "Estimated API value, not your bill")
                                     }
                                 }
@@ -524,7 +524,7 @@ Scope {
                                     spacing: 10
                                     Row {
                                         spacing: 8
-                                        Rectangle { width: 8; height: 8; radius: 4; color: root.colorFor(modelData.provider); anchors.verticalCenter: parent.verticalCenter }
+                                        Rectangle { width: 8; height: 8; radius: 4; color: root.accountColor(modelData.provider, modelData.shade); anchors.verticalCenter: parent.verticalCenter }
                                         Label { text: modelData.name; font.pixelSize: 16; font.weight: Font.DemiBold }
                                     }
                                     Row {
@@ -536,7 +536,7 @@ Scope {
                                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: modelData.valueShare === null || (modelData.tokens > 0 && modelData.unpricedTokens === modelData.tokens) ? "No priced API value" : modelData.valueShare.toFixed(1)+"% of priced API value" }
                                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: modelData.sessions ? root.compact(modelData.tokensPerSession)+" tokens · "+root.money(modelData.valuePerSession)+" priced value / recorded session" : "No recorded sessions" }
                                     Rectangle { width: parent.width; height: 3; radius: 2; color: root.edge
-                                        Rectangle { width: parent.width*(root.data.summary.tokens ? modelData.tokens/root.data.summary.tokens : 0); height: 3; radius: 2; color: root.colorFor(modelData.provider) }
+                                        Rectangle { width: parent.width*(root.data.summary.tokens ? modelData.tokens/root.data.summary.tokens : 0); height: 3; radius: 2; color: root.accountColor(modelData.provider, modelData.shade) }
                                     }
                                     Sub {
                                         width: parent.width; wrapMode: Text.WordWrap
