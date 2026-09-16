@@ -1048,12 +1048,16 @@ def write_agent_record(ledger, provider):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['report', 'scan', 'go', 'settings'])
+    parser.add_argument('action', choices=['report', 'scan', 'go', 'settings', 'theme'])
     parser.add_argument('--days', type=int, choices=[1, 7, 30, 90, 365], default=7)
     parser.add_argument('--provider', choices=['all', *PROVIDERS], default='all')
     for field in ('model', 'project', 'client', 'apiProvider', 'day', 'account'): parser.add_argument('--' + field)
     parser.add_argument('--save'); parser.add_argument('--force', action='store_true')
     args = parser.parse_args()
+    # Theme reads stay out of the ledger path so a theme swap can repaint
+    # without waiting on a history scan.
+    if args.action == 'theme':
+        print(json.dumps(theme())); return
     STATE.mkdir(parents=True, exist_ok=True)
     if args.action == 'settings':
         try: print(json.dumps(save_settings(json.loads(args.save)) if args.save else settings()))

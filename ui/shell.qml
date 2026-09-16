@@ -6,7 +6,7 @@ import Quickshell.Io
 
 Scope {
     id: root
-    readonly property var palette: data && data.theme ? data.theme.palette : ({})
+    readonly property var palette: themeData && themeData.palette ? themeData.palette : (data && data.theme ? data.theme.palette : ({}))
     readonly property color base: palette.background || "#111c18"
     readonly property color ink: palette.foreground || "#c1c497"
     readonly property color bright: palette.light_foreground || ink
@@ -15,7 +15,7 @@ Scope {
     readonly property color edge: Qt.alpha(ink, 0.14)
     readonly property color bg: Qt.alpha(base, settingsOpen ? opacitySlider.value : data ? Number(data.settings.windowOpacity || 0.985) : 0.985)
     readonly property color surface: Qt.alpha(palette.lighter_background || "#23372b", 0.28)
-    readonly property string fontFamily: data && data.theme ? data.theme.font : "monospace"
+    readonly property string fontFamily: themeData && themeData.font ? themeData.font : (data && data.theme ? data.theme.font : "monospace")
     readonly property string helper: (Quickshell.env("AI_USAGE_ROOT") || decodeURIComponent(Qt.resolvedUrl("..").toString().replace(/^file:\/\//, ""))) + "/collector.py"
     property var data: null
     property int days: 7
@@ -43,6 +43,8 @@ Scope {
     property bool settingsOpen: false
     property string error: ""
     property bool pending: false
+    property var themeData: null
+    property bool themePending: false
     property var draftEnabled: ["codex", "claude", "opencode-go"]
     property string notice: ""
     property var providerOptions: data ? data.availableProviders || [] : []
@@ -113,6 +115,10 @@ Scope {
         if (!live.running) live.running = true
         root.refresh()
     }
+    function refreshTheme() {
+        if (themeScan.running) { themePending = true; return }
+        themeScan.running = true
+    }
     function resetText(value) {
         var seconds = (Date.parse(value) - Date.now()) / 1000
         if (!isFinite(seconds)) return "Reset unavailable"
@@ -180,19 +186,30 @@ Scope {
         command: Quickshell.env("AI_USAGE_DEMO") === "1" ? ["python3", helper, "report"] : ["bash", helper.replace(/collector\.py$/, "refresh.sh"), "--force"]
         onExited: root.refresh()
     }
+    Process {
+        id: themeScan
+        command: ["python3", helper, "theme"]
+        stdout: StdioCollector { onStreamFinished: {
+            try { var t = JSON.parse(text); if (t.palette && Object.keys(t.palette).length) root.themeData = t } catch(e) {}
+        } }
+        onExited: function(code) {
+            if (root.themePending) { root.themePending = false; root.refreshTheme() }
+        }
+    }
     Timer { interval: 300000; repeat: true; running: window.visible; onTriggered: root.refresh() }
     FileView {
         // current/ is stable while omarchy theme set replaces current/theme by
         // rename, so this watcher keeps firing after each swap. The file
-        // watchers below only survive in-place edits.
+        // watchers below only survive in-place edits. A theme change repaints
+        // through the fast theme command, not a history scan.
         path: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME")+"/.local/state")+"/omarchy/current"
         watchChanges: true; printErrors: false
-        onFileChanged: root.refresh()
+        onFileChanged: root.refreshTheme()
     }
     FileView {
         path: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME")+"/.local/state")+"/omarchy/current/theme/colors.toml"
         watchChanges: true; printErrors: false
-        onFileChanged: root.refresh()
+        onFileChanged: root.refreshTheme()
     }
     FileView {
         path: Quickshell.env("HOME")+"/.config/omarchy/shell.toml"
