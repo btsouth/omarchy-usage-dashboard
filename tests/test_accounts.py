@@ -27,9 +27,9 @@ class AccountTests(unittest.TestCase):
     def add(self, key, folder, tokens=100, session=None):
         self.ledger.put(c.record(key, 'codex', session or key, self.now.isoformat(), 'gpt-4.1', '/project', 'CLI', input=tokens), self.root / folder / 'sessions/log.jsonl')
 
-    def report(self, account=None):
+    def report(self, account=None, days=7):
         with patch.object(c, 'quota', return_value={'limits': [{'label': 'Local quota'}]}), patch.object(c, 'theme', return_value={}):
-            return c.report(self.ledger, self.cfg, now=self.now, selection={'account': account} if account else {})
+            return c.report(self.ledger, self.cfg, days=days, now=self.now, selection={'account': account} if account else {})
 
     def test_account_filters_reconcile_and_relabel_without_rescan(self):
         self.add('a', 'work', 100)
@@ -80,6 +80,21 @@ class AccountTests(unittest.TestCase):
         self.assertEqual([card['provider'] for card in cards], ['codex', 'codex', 'codex'])
         self.assertEqual(self.report('personal')['cards'][0]['accountId'], 'personal')
         self.assertEqual(len(self.report('personal')['cards']), 1)
+
+    def test_daily_and_hourly_split_series_by_account(self):
+        self.add('a', 'work', 100)
+        self.add('b', 'personal', 300)
+        self.add('c', 'local', 50)
+        data = self.report()
+        today = data['daily'][-1]
+        self.assertEqual(today['providers']['codex']['tokens'], 450)
+        self.assertEqual(today['cards']['codex:personal']['tokens'], 300)
+        self.assertEqual(today['cards']['codex:work']['tokens'], 100)
+        self.assertEqual(today['cards']['codex:local']['tokens'], 50)
+        self.assertEqual([card['id'] for card in data['cards']], ['codex:personal', 'codex:work', 'codex:local'])
+        hourly = self.report(days=1)['hourly']
+        self.assertEqual(sum(h['providers']['codex']['tokens'] for h in hourly), 450)
+        self.assertEqual(sum(h['cards'].get('codex:personal', {}).get('tokens', 0) for h in hourly), 300)
 
     def test_session_averages_and_priced_share(self):
         self.add('a', 'local', 100, 'one')

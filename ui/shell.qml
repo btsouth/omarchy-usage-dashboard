@@ -440,8 +440,14 @@ Scope {
                                             ctx.fillText(root.data ? "No activity in this period" : "Reading local history…",w/2,h/2)
                                             return
                                         }
-                                        var ids=root.data ? root.data.providers.map(p=>p.id) : [], max=1
-                                        for (var d of series) for (var id of ids) max=Math.max(max,root.amount(d.providers[id]))
+                                        var cards=root.data ? root.data.cards : [], ids=cards.map(c=>c.id), max=1
+                                        var pos=[]
+                                        for (var ci=0; ci<cards.length; ci++) {
+                                            var before=0, total=0
+                                            for (var cj=0; cj<cards.length; cj++) if (cards[cj].provider===cards[ci].provider) { total++; if (cj<ci) before++ }
+                                            pos.push({before:before, total:total})
+                                        }
+                                        for (var d of series) for (var id of ids) max=Math.max(max,root.amount(d.cards[id]))
                                         ctx.font="10px \""+root.fontFamily+"\""; ctx.lineWidth=1
                                         for(var t=0;t<3;t++) {
                                             var y=top+(bottom-top)*t/2
@@ -453,8 +459,9 @@ Scope {
                                             for(var i=0;i<series.length;i++) {
                                                 var center=left+group*(i+0.5), totalWidth=ids.length*bw+(ids.length-1)*gap
                                                 for(var j=0;j<ids.length;j++) {
-                                                    var barHeight=root.amount(series[i].providers[ids[j]])/max*(bottom-top)
-                                                    ctx.fillStyle=Qt.alpha(root.colorFor(ids[j]),hovered===i?1:0.8)
+                                                    var barHeight=root.amount(series[i].cards[ids[j]])/max*(bottom-top)
+                                                    var barAlpha=pos[j].before===0?0.8:pos[j].before===1?0.55:0.38
+                                                    ctx.fillStyle=Qt.alpha(root.colorFor(cards[j].provider),hovered===i?1:barAlpha)
                                                     ctx.fillRect(center-totalWidth/2+j*(bw+gap),bottom-barHeight,bw,barHeight)
                                                 }
                                                 if(series.length<=8 || i%3===0 || i===series.length-1) {
@@ -462,16 +469,18 @@ Scope {
                                                 }
                                             }
                                         } else {
-                                            for (var pid of ids) {
+                                            for (var k=0;k<ids.length;k++) {
                                                 ctx.beginPath()
                                                 for(var i=0;i<series.length;i++) {
                                                     var x=left+(series.length===1?plot/2:i*plot/(series.length-1))
-                                                    var yy=bottom-root.amount(series[i].providers[pid])/max*(bottom-top)
+                                                    var yy=bottom-root.amount(series[i].cards[ids[k]])/max*(bottom-top)
                                                     if(i===0)ctx.moveTo(x,yy);else ctx.lineTo(x,yy)
                                                 }
-                                                ctx.strokeStyle=root.colorFor(pid);ctx.lineWidth=2.3;ctx.stroke()
-                                                if(series.length===1){ctx.beginPath();ctx.arc(x,yy,4,0,2*Math.PI);ctx.fillStyle=root.colorFor(pid);ctx.fill()}
-                                                else if(ids.length <= 3) {ctx.lineTo(left+plot,bottom);ctx.lineTo(left,bottom);ctx.closePath();ctx.fillStyle=Qt.alpha(root.colorFor(pid),0.07);ctx.fill()}
+                                                ctx.strokeStyle=root.colorFor(cards[k].provider);ctx.lineWidth=pos[k].before===0?2.3:1.8
+                                                ctx.setLineDash(pos[k].total>1 && pos[k].before>0 ? (pos[k].before===1?[5,4]:[2,2]) : [])
+                                                ctx.stroke();ctx.setLineDash([])
+                                                if(series.length===1){ctx.beginPath();ctx.arc(x,yy,4,0,2*Math.PI);ctx.fillStyle=root.colorFor(cards[k].provider);ctx.fill()}
+                                                else if(ids.length <= 3 && pos[k].before===0) {ctx.lineTo(left+plot,bottom);ctx.lineTo(left,bottom);ctx.closePath();ctx.fillStyle=Qt.alpha(root.colorFor(cards[k].provider),0.07);ctx.fill()}
                                             }
                                             ctx.fillStyle=root.muted
                                             if(series.length){ctx.fillText(series[0].date.slice(5),left,h-5);ctx.fillText(series[series.length-1].date.slice(5),w-42,h-5)}
@@ -493,7 +502,7 @@ Scope {
                                         x: chart.pointerX > chart.width/2 ? 48 : Math.max(0,chart.width-width-12)
                                         y: 16
                                         heading: chart.hovered>=0 && chart.hovered<chart.series.length ? (chart.hourly ? chart.series[chart.hovered].title : Qt.formatDate(new Date(chart.series[chart.hovered].date+"T12:00:00"),"dddd, MMM d")) : ""
-                                        rows: chart.hovered>=0 && chart.hovered<chart.series.length && root.data ? root.data.providers.map(p=>({label:p.name,value:root.display(chart.series[chart.hovered].providers[p.id]),color:root.colorFor(p.id)})) : []
+                                        rows: chart.hovered>=0 && chart.hovered<chart.series.length && root.data ? root.data.cards.map(c=>({label:c.name,value:root.display(chart.series[chart.hovered].cards[c.id]),color:root.colorFor(c.provider)})) : []
                                         detail: (chart.hourly ? "This hour · " : "") + (root.metric === "tokens" ? "Processed tokens, including cached input" : "Estimated API value, not your bill")
                                     }
                                 }

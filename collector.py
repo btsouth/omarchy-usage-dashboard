@@ -791,7 +791,7 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
                     if days == 1 else start)
     summary, previous = bucket(), bucket()
     providers = {p: bucket() for p in cfg['enabled']}
-    daily = {str(start_date + dt.timedelta(days=n)): {p: bucket() for p in providers} for n in range(days)}
+    daily = {str(start_date + dt.timedelta(days=n)): {'providers': {p: bucket() for p in providers}, 'cards': {}} for n in range(days)}
     hour_start, hour_end = start, end
     if selection.get('day'):
         selected_date = dt.date.fromisoformat(selection['day'])
@@ -800,7 +800,7 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
     hourly = [{'start': ts, 'label': dt.datetime.fromtimestamp(ts).strftime('%H:%M'),
                'title': dt.datetime.fromtimestamp(ts).astimezone().strftime('%H:%M %Z') + ' to ' +
                         (dt.datetime.fromtimestamp(ts + 3600).astimezone().strftime('%H:%M %Z') if ts + 3600 <= hour_end + 1 else 'now'),
-               'providers': {p: bucket() for p in providers}}
+               'providers': {p: bucket() for p in providers}, 'cards': {}}
               for ts in range(int(hour_start), int(hour_end) + 1, 3600)] if days == 1 or selection.get('day') else []
     models, projects, clients, sessions, routes, accounts = {}, {}, {}, {}, {}, {}
     labels, assignments = account_assignments(ledger, cfg)
@@ -826,10 +826,15 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
             continue
         add(summary, r, value, savings); add(providers[p], r, value, savings)
         provider_accounts[p].add(account)
-        if day in daily: add(daily[day][p], r, value, savings)
+        card_id = p + ':' + account
+        if day in daily:
+            add(daily[day]['providers'][p], r, value, savings)
+            add(daily[day]['cards'].setdefault(card_id, bucket()), r, value, savings)
         if hourly:
             index = int((r['ts'] - hour_start) // 3600)
-            if 0 <= index < len(hourly): add(hourly[index]['providers'][p], r, value, savings)
+            if 0 <= index < len(hourly):
+                add(hourly[index]['providers'][p], r, value, savings)
+                add(hourly[index]['cards'].setdefault(card_id, bucket()), r, value, savings)
         if value is None: unknown.add(r['model'])
         for group, key in [(models, (p, r['model'])), (projects, (p, r['project'] or 'Unknown project')),
                            (clients, (p, r['client'])), (sessions, (p, r['session'])),
@@ -874,7 +879,7 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
                 name = PROVIDERS[p] + ' · ' + labels[aid]
                 monthly = cfg['monthlyPrices'].get(aid)
                 card_quota, scope = {'limits': [], 'error': 'Quota is shown for the current login only.'}, ''
-            cards.append(fin | {'provider': p, 'accountId': aid, 'name': name, 'monthlyPrice': monthly,
+            cards.append(fin | {'id': p + ':' + aid, 'provider': p, 'accountId': aid, 'name': name, 'monthlyPrice': monthly,
                                 'quota': card_quota, 'quotaScope': scope,
                                 'valueShare': 100 * fin['value'] / summary['value'] if summary['value'] else None})
     # Model-level allowance for Go. The quota endpoint reports only aggregate
@@ -907,8 +912,10 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
                                       'valueShare': 100 * b['value'] / summary['value'] if summary['value'] else None,
                                       'monthlyPrice': cfg['monthlyPrices'].get(p) if provider_accounts[p] <= {'local'} else None}
                           for p, b in providers.items() if provider == 'all' or p == provider],
-            'daily': [{'date': day, 'providers': {p: finish(b) for p, b in values.items()}} for day, values in daily.items()],
-            'hourly': [h | {'providers': {p: finish(b) for p, b in h['providers'].items()}} for h in hourly],
+            'daily': [{'date': day, 'providers': {p: finish(b) for p, b in values['providers'].items()},
+                       'cards': {card_id: finish(b) for card_id, b in values['cards'].items()}} for day, values in daily.items()],
+            'hourly': [h | {'providers': {p: finish(b) for p, b in h['providers'].items()},
+                            'cards': {card_id: finish(b) for card_id, b in h['cards'].items()}} for h in hourly],
             'routes': rows(routes), 'models': rows(models), 'projects': rows(projects), 'clients': rows(clients), 'sessions': rows(sessions),
             'heatmap': dict(heatmap), 'unknownModels': sorted(unknown), 'coverage': coverage | {'earliest': earliest},
             'pricing': {'source': rates['source'], 'fetchedAtMs': rates.get('fetchedAtMs'),
