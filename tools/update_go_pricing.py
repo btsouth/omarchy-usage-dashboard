@@ -148,7 +148,7 @@ def main():
     parser.add_argument('--write', action='store_true', help='update pricing.json in place')
     parser.add_argument('--check', action='store_true', help='exit 1 when pricing.json is stale')
     args = parser.parse_args()
-    today = dt.datetime.now(dt.timezone.utc).date()
+    today = dt.datetime.now().astimezone().date()
     found = tables(fetch(DOCS))
     price_table = next((t for t in found if len(t[0]) >= 6 and t[0][0] == 'Model' and 'Monthly limit' in t[0]), None)
     id_table = next((t for t in found if t[0][:2] == ['Model', 'Model ID']), None)

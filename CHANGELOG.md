@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 - 2026-09-15
 
 - Synced machine ledgers: point every machine at one shared folder and each imports the others' snapshots, so totals, charts, and model breakdowns cover all of them.
+- Show synced machines in the data coverage card, and warn once per broken snapshot instead of every scan.
+- Fix release pinning in the one-line installer: tags download correctly, not only branches.
 
 ## 1.0.0 - 2026-09-15
 

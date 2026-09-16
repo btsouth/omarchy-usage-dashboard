@@ -46,6 +46,7 @@ Scope {
     property var draftEnabled: ["codex", "claude", "opencode-go"]
     property string notice: ""
     property var providerOptions: data ? data.availableProviders || [] : []
+    readonly property var machineAccounts: data && data.accountOptions ? data.accountOptions.filter(a => a.id.indexOf("machine:") === 0) : []
     property var draftPrices: ({})
     property var draftHomes: ({})
     property var draftAccounts: []
@@ -730,7 +731,8 @@ Scope {
                             id: coverageColumn
                             anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 18; spacing: 9
                             Label { text: "Data coverage"; font.pixelSize: 15; font.weight: Font.DemiBold }
-                            Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.data ? "Local history on "+root.data.coverage.machine+". Additional configured homes: "+(root.data.coverage.additionalHomes||0)+". A scan reads available folders; it does not sync another machine. Normal ChatGPT chats are not included." : "Reading sources…" }
+                            Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.data ? "Local history on "+root.data.coverage.machine+". Additional configured homes: "+(root.data.coverage.additionalHomes||0)+". A scan reads available folders"+(root.machineAccounts.length ? " and imports the synced machine ledgers below." : "; it does not sync another machine.")+" Normal ChatGPT chats are not included." : "Reading sources…" }
+                            Sub { visible: root.machineAccounts.length > 0; width: parent.width; wrapMode: Text.WordWrap; text: "Synced machines: "+root.machineAccounts.map(a=>a.label).join(", ")+". Their recorded events are included in every total and breakdown." }
                             Repeater {
                                 model: root.data ? root.data.coverage.sources || [] : []
                                 Column {
@@ -874,7 +876,7 @@ Scope {
                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Point every machine at one synced folder. Each writes its own ledger snapshot and imports the others, so totals, charts, heatmap, and model breakdowns cover all of them. Only token counters and names are shared; prompts, paths outside the ledger, and credentials stay local." }
                     Field { width: parent.width; text: root.draftLedgerSyncDir; placeholderText: "Shared folder, e.g. ~/Sync/ai-usage"; onTextEdited: root.draftLedgerSyncDir = text; Accessible.name: "Synced ledger folder" }
                     Field { width: 260; text: root.draftLedgerDeviceId; placeholderText: "Device id, e.g. desktop"; onTextEdited: root.draftLedgerDeviceId = text; Accessible.name: "Synced ledger device id" }
-                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "The device id names this machine's snapshot ("+(root.draftLedgerDeviceId||"hostname")+".sqlite). Leave it blank to use the hostname. Other machines appear as extra accounts you can filter." }
+                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "The device id names this machine's snapshot ("+(root.draftLedgerDeviceId||"hostname")+".sqlite) and must be unique per machine. Leave it blank to use the hostname. Other machines appear as extra accounts you can filter." }
                     Card {
                         width: parent.width; height: 88
                         Column { anchors.fill: parent; anchors.margins: 16; spacing: 8

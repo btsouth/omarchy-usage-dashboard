@@ -1,7 +1,7 @@
 {
   "source": "OpenCode Go official documentation and OpenCode model catalog",
   "url": "https://opencode.ai/docs/go/#usage-limits",
-  "verifiedAt": "2026-09-16",
+  "verifiedAt": "2026-09-15",
   "notes": [
     "Go is a $10/month subscription; these listed token rates are the API-equivalent value used for its usage limits, not a bill.",
     "monthly_limit_usd mirrors the documented per-model monthly usage limit and drives the model allowance view.",

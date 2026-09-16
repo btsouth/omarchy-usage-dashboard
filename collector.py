@@ -435,13 +435,16 @@ class Ledger:
                 if temporary.exists(): temporary.unlink(missing_ok=True)
         for path in sorted(directory.glob('*.sqlite')):
             if path.name == device + '.sqlite': continue
+            stamp = None
             try:
-                stat = path.stat()
-                if self.db.execute('SELECT size,mtime FROM files WHERE path=?', (str(path),)).fetchone() == (stat.st_size, stat.st_mtime_ns): continue
+                stamp = path.stat()
+                if self.db.execute('SELECT size,mtime FROM files WHERE path=?', (str(path),)).fetchone() == (stamp.st_size, stamp.st_mtime_ns): continue
                 self.import_ledger(path, path.stem)
-                self.db.execute('INSERT OR REPLACE INTO files VALUES (?,?,?)', (str(path), stat.st_size, stat.st_mtime_ns))
             except (OSError, sqlite3.Error, ValueError, TypeError, KeyError):
                 warnings.append('Could not read synced ledger ' + path.name)
+            # Record the attempted file so a broken snapshot warns once, not every scan.
+            if stamp is not None:
+                self.db.execute('INSERT OR REPLACE INTO files VALUES (?,?,?)', (str(path), stamp.st_size, stamp.st_mtime_ns))
         self.db.commit()
         return warnings
 

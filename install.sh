@@ -9,7 +9,7 @@
 set -euo pipefail
 
 ref="${OMARCHY_USAGE_REF:-main}"
-url="${OMARCHY_USAGE_TARBALL:-https://github.com/btsouth/omarchy-usage-dashboard/archive/refs/heads/${ref}.tar.gz}"
+url="${OMARCHY_USAGE_TARBALL:-https://github.com/btsouth/omarchy-usage-dashboard/archive/${ref}.tar.gz}"
 
 for command in curl tar python3; do
   command -v "$command" >/dev/null || { echo "install.sh: $command is required" >&2; exit 1; }

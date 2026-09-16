@@ -541,6 +541,10 @@ class CollectorTests(unittest.TestCase):
         # Unchanged snapshots are not imported twice.
         self.assertEqual(local.sync_ledgers(cfg), [])
         self.assertEqual(local.db.execute('SELECT COUNT(*) FROM events').fetchone()[0], 2)
+        # A corrupt snapshot warns once without aborting the scan.
+        (sync / 'broken.sqlite').write_bytes(b'not a database')
+        self.assertEqual(local.sync_ledgers(cfg), ['Could not read synced ledger broken.sqlite'])
+        self.assertEqual(local.sync_ledgers(cfg), [])
         local.db.close(); remote.db.close()
 
     def test_account_prices_save_and_unknown_price_keys_drop(self):
