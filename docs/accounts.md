@@ -24,7 +24,7 @@ The ledger retains previously recorded usage after source files disappear. Older
 
 ## Limits and comparisons
 
-History labels are not verified login identities. The All accounts view displays only the current login's quota on this PC, with its scope stated. Account-filtered views hide quota. This version does not switch authentication or fetch every account's limits.
+History labels are not verified login identities. The local card shows the current login's quota on this PC, with its scope stated. A labelled account also shows limits when an agent usage record under `~/.local/state/omarchy/agents/usage/` has the same record id as the account, or the same name as the account label; its card says where the numbers came from. Accounts without their own record keep the current-login note. This version does not switch authentication or fetch every account's limits.
 
 Optional monthly prices can be set per provider (the local history group) or per labelled account. Imported, conflicting, and unassigned histories never inherit the local price. API estimates still use the same recorded costs and catalog rules in every account view.
 

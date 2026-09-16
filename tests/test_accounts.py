@@ -1,5 +1,6 @@
 import datetime as dt
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -28,7 +29,8 @@ class AccountTests(unittest.TestCase):
         self.ledger.put(c.record(key, 'codex', session or key, self.now.isoformat(), 'gpt-4.1', '/project', 'CLI', input=tokens), self.root / folder / 'sessions/log.jsonl')
 
     def report(self, account=None, days=7):
-        with patch.object(c, 'quota', return_value={'limits': [{'label': 'Local quota'}]}), patch.object(c, 'theme', return_value={}):
+        with patch.object(c, 'quota', return_value={'limits': [{'label': 'Local quota'}]}), \
+             patch.object(c, 'account_quotas', return_value=({}, {})), patch.object(c, 'theme', return_value={}):
             return c.report(self.ledger, self.cfg, days=days, now=self.now, selection={'account': account} if account else {})
 
     def test_account_filters_reconcile_and_relabel_without_rescan(self):
@@ -97,6 +99,28 @@ class AccountTests(unittest.TestCase):
         hourly = self.report(days=1)['hourly']
         self.assertEqual(sum(h['providers']['codex']['tokens'] for h in hourly), 450)
         self.assertEqual(sum(h['cards'].get('codex:personal', {}).get('tokens', 0) for h in hourly), 300)
+
+    def test_named_account_quota_comes_from_its_own_record(self):
+        self.add('a', 'work', 100)
+        self.add('b', 'personal', 100)
+        self.add('c', 'local', 50)
+        state = self.root / 'state/ai-usage'
+        usage = state.parent / 'agents/usage'
+        usage.mkdir(parents=True)
+        (usage / 'work.json').write_text(json.dumps({'name': 'Work',
+            'limits': [{'label': 'Weekly (7-day)', 'percent': .95}], 'updatedAt': '2026-09-15T20:00:00+00:00'}))
+        (usage / 'other.json').write_text(json.dumps({'name': 'Personal',
+            'limits': [{'label': 'Weekly (7-day)', 'percent': .5}]}))
+        (usage / 'broken.json').write_text('not json')
+        with patch.object(c, 'STATE', state), patch.object(c, 'quota', return_value={'limits': [{'label': 'Local quota'}]}), \
+             patch.object(c, 'theme', return_value={}):
+            cards = {card['accountId']: card for card in c.report(self.ledger, self.cfg, now=self.now)['cards']}
+        self.assertEqual(cards['work']['quota']['limits'][0]['percent'], .95)
+        self.assertEqual(cards['work']['quotaScope'], 'From its own usage record')
+        self.assertEqual(cards['personal']['quota']['limits'][0]['percent'], .5)
+        self.assertEqual(cards['local']['quota']['limits'], [{'label': 'Local quota'}])
+        self.assertEqual(cards['local']['quotaScope'], 'Current login on this PC')
+        self.assertIn('current login', self.report('work')['cards'][0]['quota']['error'])
 
     def test_session_averages_and_priced_share(self):
         self.add('a', 'local', 100, 'one')

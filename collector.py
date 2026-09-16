@@ -606,6 +606,23 @@ def go_quota(force=False):
     return cached
 
 
+def account_quotas():
+    # Labelled accounts may have their own agent usage records (for example a
+    # second Codex home with its own collector). Index them by record id and
+    # by record name so an account can pick up its limits when either matches.
+    by_id, by_name = {}, {}
+    try: paths = sorted((STATE.parent / 'agents/usage').glob('*.json'))
+    except OSError: paths = []
+    for path in paths:
+        try: d = json.loads(path.read_text())
+        except (OSError, ValueError): continue
+        if not isinstance(d, dict) or not (d.get('limits') or d.get('usageStatusText')): continue
+        record = {'limits': d.get('limits', []), 'updatedAt': d.get('updatedAt'), 'error': d.get('usageStatusText', ''), 'plan': d.get('tierLabel', '')}
+        by_id[path.stem] = record
+        if d.get('name'): by_name.setdefault(str(d['name']).casefold(), record)
+    return by_id, by_name
+
+
 def quota(provider):
     if provider in ('opencode', 'pi', 'omp'):
         return {'limits': [], 'error': 'Account limits belong to the underlying provider and are not collected here.'}
@@ -861,6 +878,7 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
     # A named account uses only its own price; the local group uses the
     # provider price. Quota remains attached to the current login only.
     named_providers = {d['provider'] for account in cfg.get('accounts', []) for d in account['directories']}
+    accounts_by_id, accounts_by_name = account_quotas()
     cards = []
     for p, b in providers.items():
         if provider != 'all' and p != provider: continue
@@ -878,7 +896,13 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
             else:
                 name = PROVIDERS[p] + ' · ' + labels[aid]
                 monthly = cfg['monthlyPrices'].get(aid)
-                card_quota, scope = {'limits': [], 'error': 'Quota is shown for the current login only.'}, ''
+                # A labelled account with its own agent record shows that
+                # record's limits; otherwise quota stays with the login.
+                own = None if aid in PROVIDERS else (accounts_by_id.get(str(aid)) or accounts_by_name.get(labels[aid].casefold()))
+                if own is not None:
+                    card_quota, scope = own, 'From its own usage record'
+                else:
+                    card_quota, scope = {'limits': [], 'error': 'Quota is shown for the current login only.'}, ''
             cards.append(fin | {'id': p + ':' + aid, 'provider': p, 'accountId': aid, 'name': name, 'monthlyPrice': monthly,
                                 'shade': shade, 'shades': len(group),
                                 'quota': card_quota, 'quotaScope': scope,

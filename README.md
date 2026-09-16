@@ -73,7 +73,7 @@ Under **Settings → History accounts**, add a name and one or more agent home f
 
 Folders must already be available locally or mounted. The dashboard does not sync files. Copied records count once; conflicting account assignments are flagged.
 
-Account labels group history, not credentials. **All accounts** shows the current login's quota on this PC; account-filtered views hide quota. The overview gives each labelled account its own card, and the daily and hourly charts draw one series per account in its own shade of the provider color, solid for the largest and dashed for the others. Optional monthly prices apply to the local history group when set on a provider, or to one account when set on its label; imported history never inherits the local price. See [account setup](docs/accounts.md).
+Account labels group history, not credentials. **All accounts** shows the current login's quota on this PC, and a labelled account whose usage record carries the same id or name shows its own limits beside it. The overview gives each labelled account its own card, and the daily and hourly charts draw one series per account in its own shade of the provider color, solid for the largest and dashed for the others. Optional monthly prices apply to the local history group when set on a provider, or to one account when set on its label; imported history never inherits the local price. See [account setup](docs/accounts.md).
 
 ## Understanding the numbers
 
