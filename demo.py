@@ -15,6 +15,7 @@ ROOT=Path(__file__).resolve().parent
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--view', choices=['overview', 'settings', 'accounts', 'today'], default='overview')
 parser.add_argument('--capture',type=Path,help='render a PNG offscreen and exit')
+parser.add_argument('--agents',help='comma-separated providers to enable, default all')
 args=parser.parse_args()
 with tempfile.TemporaryDirectory(prefix='usage-dashboard-demo-') as tmp:
     base=Path(tmp);env=dict(os.environ)
@@ -24,7 +25,8 @@ with tempfile.TemporaryDirectory(prefix='usage-dashboard-demo-') as tmp:
     if args.capture: env.update(QT_QPA_PLATFORM='offscreen',QT_QUICK_BACKEND='software')
     os.environ.update(env)
     spec=importlib.util.spec_from_file_location('demo_collector',ROOT/'collector.py');c=importlib.util.module_from_spec(spec);spec.loader.exec_module(c)
-    c.atomic_json(c.CONFIG, c.DEFAULTS | {'enabled': list(c.PROVIDERS), 'accounts': [{'id':'work','label':'Work','directories':[{'provider':p,'path':str(base/'work'/p)} for p in c.PROVIDERS]}]})
+    providers=[p for p in (args.agents.split(',') if args.agents else c.PROVIDERS) if p in c.PROVIDERS] or list(c.PROVIDERS)
+    c.atomic_json(c.CONFIG, c.DEFAULTS | {'enabled': providers, 'accounts': [{'id':'work','label':'Work','directories':[{'provider':p,'path':str(base/'work'/p)} for p in providers]}]})
     ledger=c.Ledger(c.STATE/'usage.sqlite');rng=random.Random(7);now=dt.datetime.now().astimezone()
     for offset in range(7):
         date=now.date()-dt.timedelta(days=offset)
