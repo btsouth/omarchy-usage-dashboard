@@ -12,6 +12,10 @@
 - Reopen unmapped dashboard windows and focus the correct instance across workspaces.
 - Keep provider colors readable on light and dark backgrounds.
 - Wrap bar-widget provider chips when many sources are enabled.
+- One overview card per account, with optional monthly prices per provider or labelled account.
+- OpenCode Go prices the full documented model table, doubles DeepSeek rates during peak hours, and falls back to OpenCode's recorded cost for unlisted models.
+- The Go card shows value used against each model's monthly allowance, including the DeepSeek V4.1 Flash 4x promo through Sep 20.
+- Price Codex `gpt-5.3-codex-spark` and mark `codex-auto-review` internal, clearing the missing-price warning.
 
 ## Initial package
 

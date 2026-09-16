@@ -30,6 +30,11 @@ HOME_KEYS = ('codexHomes', 'claudeHomes', 'grokHomes', 'geminiHomes', 'opencodeH
 DEFAULTS = {'enabled': ['codex', 'claude', 'opencode-go'], 'monthlyPrices': {},
             **{key: [] for key in HOME_KEYS}, 'accounts': [], 'localAccountLabel': 'Local', 'windowOpacity': 0.985}
 FIELDS = ('input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h', 'reasoning')
+# Bundled official rate tables merged over the catalog, in order. User
+# rates.json entries still win over every file listed here.
+OVERRIDES = (('pricing.json', 'OpenCode Go official rates'),
+             ('muse-pricing.json', 'Muse official rates'),
+             ('codex-pricing.json', 'Codex model rates'))
 
 
 def atomic_json(path, value):
@@ -349,7 +354,9 @@ def opencode_record(mid, sid, ts, project, model, route, usage, cost):
                input=usage.get('input'), output=number(usage.get('output')) + number(usage.get('reasoning')),
                reasoning=usage.get('reasoning'), cacheRead=cache.get('read'), cacheWrite=cache.get('write'))
     r['apiProvider'] = str(route or 'unknown')
-    r['reportedValue'] = reported_value(cost) if provider == 'opencode' else None
+    # Go keeps the app's own estimate as a fallback for models the catalog
+    # does not cover yet. Catalog rates still win where they exist.
+    r['reportedValue'] = reported_value(cost)
     return r
 
 
@@ -487,7 +494,7 @@ def load_rates():
         data = {'document': {}, 'source': 'Pricing catalog unavailable', 'fetchedAtMs': None}
     else:
         data.setdefault('source', 'Bundled pricing catalog')
-    for name, label in [('pricing.json', 'OpenCode Go official rates'), ('muse-pricing.json', 'Muse official rates')]:
+    for name, label in OVERRIDES:
         try:
             official = json.loads(Path(__file__).with_name(name).read_text())
             if not isinstance(official.get('models'), dict): raise ValueError('Invalid override')
@@ -507,15 +514,30 @@ def load_rates():
     return data
 
 
+def peak_rate(rate, ts):
+    multiplier, hours = rate.get('peak_cost_multiplier'), rate.get('peak_hours_utc')
+    if not ts or not isinstance(multiplier, (int, float)) or not isinstance(hours, list): return rate
+    moment = dt.datetime.fromtimestamp(ts, dt.timezone.utc)
+    if rate.get('peak_weekdays_only') and moment.weekday() >= 5: return rate
+    if not any(isinstance(window, list) and len(window) == 2 and window[0] <= moment.hour < window[1] for window in hours): return rate
+    return {key: (value * multiplier if isinstance(value, (int, float)) and 'cost' in key and 'token' in key else value)
+            for key, value in rate.items()}
+
+
 def price(r, catalog):
     if r['provider'] == 'grok':
         ticks = r.get('reportedCostTicks')
         return (ticks / 10_000_000_000, None) if ticks else (None, None)
     if r['provider'] in ('opencode', 'pi', 'omp') and r.get('reportedValue') is not None:
         return r['reportedValue'], None
+    fallback = r.get('reportedValue') if r['provider'] == 'opencode-go' else None
+    fallback = (fallback, None) if fallback is not None else (None, None)
     model = r['model']
     rate = catalog.get((r.get('apiProvider') or r['provider']) + '/' + model) or catalog.get(model) or catalog.get('anthropic/' + model) or catalog.get('openai/' + model) or catalog.get('gemini/' + model)
-    if not rate: return None, None
+    if not rate: return fallback
+    # Internal models have no published rate and are not billed per token.
+    if rate.get('internal'): return 0.0, None
+    rate = peak_rate(rate, r['ts'])
     context = r['input'] + r['cacheRead'] + r['cacheWrite']
     suffix = ''
     for threshold, candidate in [(200000, '_above_200k_tokens'), (256000, '_above_256k_tokens'), (272000, '_above_272k_tokens')]:
@@ -527,7 +549,7 @@ def price(r, catalog):
     write1h = cost('cache_creation_input_token_cost_above_1hr', None)
     parts = [(r['input'], inp), (r['output'], out), (r['cacheRead'], read),
              (max(0, r['cacheWrite'] - r['cacheWrite1h']), write), (r['cacheWrite1h'], write1h)]
-    if any(n and not isinstance(v, (int, float)) for n, v in parts): return None, None
+    if any(n and not isinstance(v, (int, float)) for n, v in parts): return fallback
     value = sum(n * (v or 0) for n, v in parts)
     saving = max(0, r['cacheRead'] * ((inp or 0) - (read or 0)))
     return value, saving
@@ -855,13 +877,32 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
             cards.append(fin | {'provider': p, 'accountId': aid, 'name': name, 'monthlyPrice': monthly,
                                 'quota': card_quota, 'quotaScope': scope,
                                 'valueShare': 100 * fin['value'] / summary['value'] if summary['value'] else None})
+    # Model-level allowance for Go. The quota endpoint reports only aggregate
+    # windows, so value against each model's documented monthly limit is
+    # estimated from local history during the current monthly reset window.
+    go_allowance = {'since': None, 'models': []}
+    if 'opencode-go' in providers:
+        monthly = next((limit for limit in quota('opencode-go').get('limits', []) if limit.get('label') == 'Monthly' and limit.get('resetsAt')), None)
+        go_allowance['since'] = int(timestamp(monthly['resetsAt']) - 30 * 86400) if monthly else int(dt.datetime.combine(today.date().replace(day=1), dt.time()).timestamp())
+        used = {}
+        for row in ledger.db.execute('SELECT * FROM events WHERE provider=? AND ts>=? AND ts<=?', ('opencode-go', go_allowance['since'], end)):
+            r = dict(row)
+            rate = rates['document'].get('opencode-go/' + r['model']) or rates['document'].get(r['model'])
+            if not isinstance(rate, dict) or not isinstance(rate.get('monthly_limit_usd'), (int, float)): continue
+            entry = used.setdefault(r['model'], [rate, 0.0])
+            entry[1] += price(r, rates['document'])[0] or 0
+        for model, (rate, value) in sorted(used.items(), key=lambda item: item[1][1], reverse=True):
+            limit, promo, promo_ends = rate['monthly_limit_usd'], False, ''
+            if isinstance(rate.get('monthly_limit_promo_usd'), (int, float)) and rate.get('promo_ends') and today.date() <= dt.date.fromisoformat(rate['promo_ends']):
+                limit, promo, promo_ends = rate['monthly_limit_promo_usd'], True, rate['promo_ends']
+            go_allowance['models'].append({'model': model, 'value': value, 'limit': limit, 'promo': promo, 'promoEnds': promo_ends})
     return {'selection': selection, 'generatedAt': time.time(), 'period': {'days': days, 'start': str(start_date), 'end': str(today.date())},
             'accountOptions': account_options,
             'accounts': [r | {'accountId': r['name'], 'name': labels[r['name']]} for r in rows(accounts)],
             'accountWarning': 'Copies of the same history belong to different accounts. Move mirrored folders into one account.' if any(a == 'conflict' for p, a in accounts) else '',
             'availableProviders': [{'id': p, 'name': name} for p, name in PROVIDERS.items()],
             'summary': finish(summary), 'previous': finish(previous),
-            'cards': cards,
+            'cards': cards, 'goAllowance': go_allowance,
             'providers': [finish(b) | {'id': p, 'name': PROVIDERS[p], 'quota': quota(p) if not selection.get('account') else {'limits': [], 'error': 'View All accounts for current-login quota. History labels do not identify credentials.'}, 'quotaScope': 'Current login on this PC',
                                       'valueShare': 100 * b['value'] / summary['value'] if summary['value'] else None,
                                       'monthlyPrice': cfg['monthlyPrices'].get(p) if provider_accounts[p] <= {'local'} else None}

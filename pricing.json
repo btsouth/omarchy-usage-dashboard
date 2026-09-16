@@ -4,7 +4,8 @@
   "verifiedAt": "2026-09-15",
   "notes": [
     "Go is a $10/month subscription; these listed token rates are the API-equivalent value used for its usage limits, not a bill.",
-    "DeepSeek V4.1 Flash, V4 Pro, V4 Flash, and V4 Flash Vision Exp double during peak hours (01:00-04:00 and 06:00-10:00 UTC, Monday-Friday). These entries use the off-peak rates.",
+    "monthly_limit_usd mirrors the documented per-model monthly usage limit and drives the model allowance view.",
+    "deepseek entries carry peak_cost_multiplier and peak_hours_utc: peak hours double the listed rates, Monday-Friday, all other hours off-peak.",
     "The DeepSeek V4.1 Flash 4x listed-usage promo ends September 20, 2026 and changes allowance, not token prices.",
     "ox-alpha-free is free to use and omen-alpha is not in the current docs table; both rates come from OpenCode's model catalog."
   ],
@@ -12,97 +13,115 @@
     "opencode-go/glm-5.3-flash": {
       "input_cost_per_token": 0.00000015,
       "output_cost_per_token": 0.00000050,
-      "cache_read_input_token_cost": 0.00000003
+      "cache_read_input_token_cost": 0.00000003,
+      "monthly_limit_usd": 60
     },
     "opencode-go/glm-5.3": {
       "input_cost_per_token": 0.0000014,
       "output_cost_per_token": 0.0000044,
-      "cache_read_input_token_cost": 0.00000026
+      "cache_read_input_token_cost": 0.00000026,
+      "monthly_limit_usd": 15
     },
     "opencode-go/glm-5.2": {
       "input_cost_per_token": 0.0000014,
       "output_cost_per_token": 0.0000044,
-      "cache_read_input_token_cost": 0.00000026
+      "cache_read_input_token_cost": 0.00000026,
+      "monthly_limit_usd": 60
     },
     "opencode-go/glm-5.1": {
       "input_cost_per_token": 0.0000014,
       "output_cost_per_token": 0.0000044,
-      "cache_read_input_token_cost": 0.00000026
+      "cache_read_input_token_cost": 0.00000026,
+      "monthly_limit_usd": 60
     },
     "opencode-go/kimi-k3": {
       "input_cost_per_token": 0.000003,
       "output_cost_per_token": 0.000015,
-      "cache_read_input_token_cost": 0.0000003
+      "cache_read_input_token_cost": 0.0000003,
+      "monthly_limit_usd": 15
     },
     "opencode-go/kimi-k2.7-code": {
       "input_cost_per_token": 0.00000095,
       "output_cost_per_token": 0.000004,
-      "cache_read_input_token_cost": 0.00000019
+      "cache_read_input_token_cost": 0.00000019,
+      "monthly_limit_usd": 60
     },
     "opencode-go/kimi-k2.6": {
       "input_cost_per_token": 0.00000095,
       "output_cost_per_token": 0.000004,
-      "cache_read_input_token_cost": 0.00000016
+      "cache_read_input_token_cost": 0.00000016,
+      "monthly_limit_usd": 60
     },
     "opencode-go/longcat-2.0": {
       "input_cost_per_token": 0.0000003,
       "output_cost_per_token": 0.0000012,
-      "cache_read_input_token_cost": 0.000000006
+      "cache_read_input_token_cost": 0.000000006,
+      "monthly_limit_usd": 60
     },
     "opencode-go/mimo-v2.5": {
       "input_cost_per_token": 0.00000014,
       "output_cost_per_token": 0.00000028,
-      "cache_read_input_token_cost": 0.0000000028
+      "cache_read_input_token_cost": 0.0000000028,
+      "monthly_limit_usd": 60
     },
     "opencode-go/mimo-v2.5-pro": {
       "input_cost_per_token": 0.000000435,
       "output_cost_per_token": 0.00000087,
-      "cache_read_input_token_cost": 0.000000003625
+      "cache_read_input_token_cost": 0.000000003625,
+      "monthly_limit_usd": 15
     },
     "opencode-go/minimax-m3": {
       "input_cost_per_token": 0.0000003,
       "output_cost_per_token": 0.0000012,
-      "cache_read_input_token_cost": 0.00000006
+      "cache_read_input_token_cost": 0.00000006,
+      "monthly_limit_usd": 60
     },
     "opencode-go/minimax-m2.7": {
       "input_cost_per_token": 0.0000003,
       "output_cost_per_token": 0.0000012,
       "cache_read_input_token_cost": 0.00000006,
-      "cache_creation_input_token_cost": 0.000000375
+      "cache_creation_input_token_cost": 0.000000375,
+      "monthly_limit_usd": 60
     },
     "opencode-go/minimax-m2.5": {
       "input_cost_per_token": 0.0000003,
       "output_cost_per_token": 0.0000012,
       "cache_read_input_token_cost": 0.00000006,
-      "cache_creation_input_token_cost": 0.000000375
+      "cache_creation_input_token_cost": 0.000000375,
+      "monthly_limit_usd": 60
     },
     "opencode-go/muse-spark-1.3-contributor": {
       "input_cost_per_token": 0.0000001,
       "output_cost_per_token": 0.0000002,
-      "cache_read_input_token_cost": 0.000000002
+      "cache_read_input_token_cost": 0.000000002,
+      "monthly_limit_usd": 60
     },
     "opencode-go/muse-spark-1.2-contributor": {
       "input_cost_per_token": 0.0000001,
       "output_cost_per_token": 0.0000002,
-      "cache_read_input_token_cost": 0.000000002
+      "cache_read_input_token_cost": 0.000000002,
+      "monthly_limit_usd": 60
     },
     "opencode-go/qwen3.8-max": {
       "input_cost_per_token": 0.000002,
       "output_cost_per_token": 0.000006,
       "cache_read_input_token_cost": 0.00000025,
-      "cache_creation_input_token_cost": 0.0000025
+      "cache_creation_input_token_cost": 0.0000025,
+      "monthly_limit_usd": 15
     },
     "opencode-go/qwen3.8-flash": {
       "input_cost_per_token": 0.00000015,
       "output_cost_per_token": 0.00000047,
       "cache_read_input_token_cost": 0.000000016,
-      "cache_creation_input_token_cost": 0.0000002
+      "cache_creation_input_token_cost": 0.0000002,
+      "monthly_limit_usd": 30
     },
     "opencode-go/qwen3.7-max": {
       "input_cost_per_token": 0.0000025,
       "output_cost_per_token": 0.0000075,
       "cache_read_input_token_cost": 0.0000005,
-      "cache_creation_input_token_cost": 0.000003125
+      "cache_creation_input_token_cost": 0.000003125,
+      "monthly_limit_usd": 30
     },
     "opencode-go/qwen3.7-plus": {
       "input_cost_per_token": 0.0000004,
@@ -112,7 +131,8 @@
       "input_cost_per_token_above_256k_tokens": 0.0000012,
       "output_cost_per_token_above_256k_tokens": 0.0000048,
       "cache_read_input_token_cost_above_256k_tokens": 0.00000012,
-      "cache_creation_input_token_cost_above_256k_tokens": 0.0000015
+      "cache_creation_input_token_cost_above_256k_tokens": 0.0000015,
+      "monthly_limit_usd": 60
     },
     "opencode-go/qwen3.6-plus": {
       "input_cost_per_token": 0.0000005,
@@ -122,7 +142,8 @@
       "input_cost_per_token_above_256k_tokens": 0.000002,
       "output_cost_per_token_above_256k_tokens": 0.000006,
       "cache_read_input_token_cost_above_256k_tokens": 0.0000002,
-      "cache_creation_input_token_cost_above_256k_tokens": 0.0000025
+      "cache_creation_input_token_cost_above_256k_tokens": 0.0000025,
+      "monthly_limit_usd": 60
     },
     "opencode-go/grok-4.6": {
       "input_cost_per_token": 0.000002,
@@ -130,7 +151,8 @@
       "cache_read_input_token_cost": 0.0000005,
       "input_cost_per_token_above_200k_tokens": 0.000004,
       "output_cost_per_token_above_200k_tokens": 0.000012,
-      "cache_read_input_token_cost_above_200k_tokens": 0.000001
+      "cache_read_input_token_cost_above_200k_tokens": 0.000001,
+      "monthly_limit_usd": 15
     },
     "opencode-go/gpt-5.6-luna": {
       "input_cost_per_token": 0.0000002,
@@ -140,37 +162,58 @@
       "input_cost_per_token_above_272k_tokens": 0.0000004,
       "output_cost_per_token_above_272k_tokens": 0.0000018,
       "cache_read_input_token_cost_above_272k_tokens": 0.00000004,
-      "cache_creation_input_token_cost_above_272k_tokens": 0.0000005
+      "cache_creation_input_token_cost_above_272k_tokens": 0.0000005,
+      "monthly_limit_usd": 15
     },
     "opencode-go/hy4-preview": {
       "input_cost_per_token": 0.000000834,
       "output_cost_per_token": 0.000002501,
-      "cache_read_input_token_cost": 0.000000042
+      "cache_read_input_token_cost": 0.000000042,
+      "monthly_limit_usd": 30
     },
     "opencode-go/hy3": {
       "input_cost_per_token": 0.00000014,
       "output_cost_per_token": 0.00000058,
-      "cache_read_input_token_cost": 0.000000035
+      "cache_read_input_token_cost": 0.000000035,
+      "monthly_limit_usd": 60
     },
     "opencode-go/deepseek-v4.1-flash": {
       "input_cost_per_token": 0.00000015,
       "output_cost_per_token": 0.0000006,
-      "cache_read_input_token_cost": 0.000000003
+      "cache_read_input_token_cost": 0.000000003,
+      "monthly_limit_usd": 15,
+      "monthly_limit_promo_usd": 60,
+      "promo_ends": "2026-09-20",
+      "peak_cost_multiplier": 2,
+      "peak_hours_utc": [[1, 4], [6, 10]],
+      "peak_weekdays_only": true
     },
     "opencode-go/deepseek-v4-pro": {
       "input_cost_per_token": 0.00000066,
       "output_cost_per_token": 0.00000198,
-      "cache_read_input_token_cost": 0.000000022
+      "cache_read_input_token_cost": 0.000000022,
+      "monthly_limit_usd": 15,
+      "peak_cost_multiplier": 2,
+      "peak_hours_utc": [[1, 4], [6, 10]],
+      "peak_weekdays_only": true
     },
     "opencode-go/deepseek-v4-flash": {
       "input_cost_per_token": 0.00000015,
       "output_cost_per_token": 0.0000006,
-      "cache_read_input_token_cost": 0.000000003
+      "cache_read_input_token_cost": 0.000000003,
+      "monthly_limit_usd": 30,
+      "peak_cost_multiplier": 2,
+      "peak_hours_utc": [[1, 4], [6, 10]],
+      "peak_weekdays_only": true
     },
     "opencode-go/deepseek-v4-flash-vision-exp": {
       "input_cost_per_token": 0.00000015,
       "output_cost_per_token": 0.0000006,
-      "cache_read_input_token_cost": 0.000000003
+      "cache_read_input_token_cost": 0.000000003,
+      "monthly_limit_usd": 15,
+      "peak_cost_multiplier": 2,
+      "peak_hours_utc": [[1, 4], [6, 10]],
+      "peak_weekdays_only": true
     },
     "opencode-go/omen-alpha": {
       "input_cost_per_token": 0.0000002,

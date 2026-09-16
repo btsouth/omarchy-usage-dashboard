@@ -78,7 +78,7 @@ Account labels group history, not credentials. **All accounts** shows the curren
 ## Understanding the numbers
 
 - **Processed tokens** count reused context on every request. They are not a count of unique text.
-- **API value** uses recorded estimates or catalog prices. It is not your subscription bill. Missing prices stay marked as unpriced.
+- **API value** uses recorded estimates or catalog prices. OpenCode Go follows the documented model rates, including peak-hour doubling for DeepSeek and the per-model monthly allowances shown on the Go card. It is not your subscription bill. Missing prices stay marked as unpriced.
 - **Per-session averages** cover recorded activity in the selected period. A session is not a completed task or a model-efficiency benchmark.
 
 History refreshes every 15 minutes, along with OpenCode Go and enabled Grok quota. **Refresh** also requests fresh Codex and Claude limits from Omarchy. See [pricing details](docs/pricing.md) for rates and accounting.

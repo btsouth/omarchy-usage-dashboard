@@ -496,8 +496,9 @@ class CollectorTests(unittest.TestCase):
         cfg = c.DEFAULTS | {'enabled': ['opencode-go', 'opencode']}
         report = c.report(ledger, cfg, 7, now=dt.datetime(2026, 9, 5).astimezone())
         self.assertEqual(report['summary']['tokens'], 105)
-        self.assertEqual(report['summary']['unpricedTokens'], 35)
-        self.assertAlmostEqual(report['summary']['value'], .4)
+        # Go keeps the app's recorded estimate as a fallback for unlisted models.
+        self.assertEqual(report['summary']['unpricedTokens'], 0)
+        self.assertAlmostEqual(report['summary']['value'], .6)
         filtered = c.report(ledger, cfg, 7, now=dt.datetime(2026, 9, 5).astimezone(), selection={'apiProvider': 'openrouter'})
         self.assertEqual(filtered['summary']['tokens'], 35)
         self.assertEqual(len(report['routes']), 3)
@@ -528,6 +529,57 @@ class CollectorTests(unittest.TestCase):
                 self.assertAlmostEqual(c.price(rec, rates)[0], expected, places=9)
         free = c.record('x', 'opencode-go', 's', '2026-09-04T12:00:00Z', 'ox-alpha-free', '/p', 'OpenCode', input=1000)
         self.assertEqual(c.price(free, rates)[0], 0)
+
+    def test_catalog_rates_still_win_over_recorded_go_cost(self):
+        with patch.object(c, 'STATE', self.root):
+            rates = c.load_rates()['document']
+        rec = c.record('x', 'opencode-go', 's', '2026-09-04T12:00:00Z', 'glm-5.3-flash', '/p', 'OpenCode', input=1_000_000)
+        rec['reportedValue'] = 99.0
+        self.assertAlmostEqual(c.price(rec, rates)[0], 0.15, places=9)
+
+    def test_go_peak_hours_double_deepseek_rates(self):
+        with patch.object(c, 'STATE', self.root):
+            rates = c.load_rates()['document']
+        def value(ts):
+            rec = c.record('x', 'opencode-go', 's', ts, 'deepseek-v4.1-flash', '/p', 'OpenCode',
+                           input=1_000_000, output=1_000_000, cacheRead=1_000_000)
+            return c.price(rec, rates)[0]
+        off_peak = value('2026-09-08T15:00:00Z')
+        peak = value('2026-09-08T02:00:00Z')
+        weekend = value('2026-09-12T02:00:00Z')
+        self.assertAlmostEqual(off_peak, 0.15 + 0.6 + 0.003, places=9)
+        self.assertAlmostEqual(peak, off_peak * 2, places=9)
+        self.assertAlmostEqual(weekend, off_peak, places=9)
+
+    def test_internal_codex_model_is_zero_and_not_unpriced(self):
+        with patch.object(c, 'STATE', self.root):
+            rates = c.load_rates()['document']
+        auto_review = c.record('x', 'codex', 's', '2026-09-04T12:00:00Z', 'codex-auto-review', '/p', 'CLI', input=1000)
+        self.assertEqual(c.price(auto_review, rates), (0.0, None))
+        spark = c.record('x', 'codex', 's', '2026-09-04T12:00:00Z', 'gpt-5.3-codex-spark', '/p', 'CLI', input=1_000_000)
+        self.assertAlmostEqual(c.price(spark, rates)[0], 1.75, places=9)
+
+    def test_go_allowance_uses_monthly_window_and_promo(self):
+        ledger = c.Ledger(self.root / 'allowance.sqlite')
+        ledger.put(c.opencode_record('m1', 's', '2026-09-14T12:00:00Z', '/p', 'deepseek-v4.1-flash', 'opencode-go', {'input': 1_000_000}, 0))
+        ledger.put(c.opencode_record('m2', 's', '2026-09-02T12:00:00Z', '/p', 'glm-5.3-flash', 'opencode-go', {'input': 1_000_000}, 0))
+        ledger.put(c.opencode_record('m3', 's', '2026-08-01T12:00:00Z', '/p', 'glm-5.3-flash', 'opencode-go', {'input': 9_000_000}, 0))
+        rates = {'source': 'test', 'document': {
+            'opencode-go/deepseek-v4.1-flash': {'input_cost_per_token': .000001, 'output_cost_per_token': 0, 'cache_read_input_token_cost': 0,
+                                                'monthly_limit_usd': 15, 'monthly_limit_promo_usd': 60, 'promo_ends': '2026-09-20'},
+            'opencode-go/glm-5.3-flash': {'input_cost_per_token': .000002, 'output_cost_per_token': 0, 'cache_read_input_token_cost': 0,
+                                          'monthly_limit_usd': 60}}}
+        cfg = c.DEFAULTS | {'enabled': ['opencode-go']}
+        with patch.object(c, 'load_rates', return_value=rates), patch.object(c, 'theme', return_value={}), \
+             patch.object(c, 'quota', return_value={'limits': [{'label': 'Monthly', 'resetsAt': '2026-10-01T00:00:00+00:00'}]}):
+            data = c.report(ledger, cfg, 7, now=dt.datetime(2026, 9, 15).astimezone())
+        allowance = {row['model']: row for row in data['goAllowance']['models']}
+        self.assertEqual(sorted(allowance), ['deepseek-v4.1-flash', 'glm-5.3-flash'])
+        self.assertAlmostEqual(allowance['deepseek-v4.1-flash']['value'], 1.0)
+        self.assertEqual((allowance['deepseek-v4.1-flash']['limit'], allowance['deepseek-v4.1-flash']['promo']), (60, True))
+        self.assertAlmostEqual(allowance['glm-5.3-flash']['value'], 2.0)
+        self.assertEqual((allowance['glm-5.3-flash']['limit'], allowance['glm-5.3-flash']['promo']), (60, False))
+        ledger.db.close()
 
     def test_opencode_legacy_and_database_copies_merge(self):
         root = self.root / 'data/opencode'; root.mkdir(parents=True)

@@ -89,6 +89,7 @@ Scope {
         return n >= 1e9 ? (n/1e9).toFixed(2)+"B" : n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1e3 ? (n/1e3).toFixed(1)+"K" : String(Math.round(n))
     }
     function money(n) { return "$" + Number(n || 0).toLocaleString(Qt.locale("en_US"), 'f', 2) }
+    function shortDate(value) { return value ? Qt.formatDate(new Date(value+"T12:00:00"),"MMM d") : "" }
     function display(b) { return metric === "tokens" ? compact(b ? b.tokens : 0) : b && b.tokens > 0 && b.unpricedTokens === b.tokens ? "Unpriced" : money(b ? b.value : 0) }
     function amount(b) { return b ? (metric === "tokens" ? b.tokens : b.value) : 0 }
     function valueText(b) { return b.unpricedTokens === b.tokens && b.tokens > 0 ? "Unpriced" : money(b.value) + (b.unpricedTokens ? " + unpriced" : "") }
@@ -549,6 +550,29 @@ Scope {
                                             }
                                             Sub { text: root.resetText(modelData.resetsAt); font.pixelSize: 10 }
                                         }
+                                    }
+                                    Column {
+                                        visible: modelData.provider === "opencode-go" && !!root.data && root.data.goAllowance.models.length > 0
+                                        width: providerColumn.width; spacing: 5
+                                        Sub { text: "Model allowance · this month" }
+                                        Repeater {
+                                            model: root.data ? root.data.goAllowance.models.slice(0,4) : []
+                                            Column {
+                                                required property var modelData
+                                                width: providerColumn.width; spacing: 2
+                                                RowLayout { width: parent.width; spacing: 8
+                                                    Sub { text: modelData.model; Layout.fillWidth: true; elide: Text.ElideRight }
+                                                    Label { text: root.money(modelData.value)+" / "+root.money(modelData.limit); font.pixelSize: 10 }
+                                                }
+                                                Rectangle { width: parent.width; height: 3; radius: 2; color: root.edge
+                                                    Rectangle { height: 3; radius: 2
+                                                        width: parent.width*Math.min(1, modelData.limit > 0 ? modelData.value/modelData.limit : 0)
+                                                        color: modelData.value >= modelData.limit*0.9 ? root.colorFor("claude") : Qt.alpha(root.ink,0.55) }
+                                                }
+                                                Sub { visible: modelData.promo; text: "4x promo through "+root.shortDate(modelData.promoEnds); font.pixelSize: 9 }
+                                            }
+                                        }
+                                        Sub { visible: !!root.data && root.data.goAllowance.models.length > 4; text: "+"+(root.data.goAllowance.models.length-4)+" more models used this month"; font.pixelSize: 9 }
                                     }
                                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: modelData.quota.error || root.quotaAge(modelData.quota); font.pixelSize: 10 }
                                 }

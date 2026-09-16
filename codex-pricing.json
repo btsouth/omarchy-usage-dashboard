@@ -1,0 +1,19 @@
+{
+  "source": "OpenCode model catalog (models.dev)",
+  "url": "https://models.dev/api.json",
+  "verifiedAt": "2026-09-15",
+  "notes": [
+    "gpt-5.3-codex-spark rates are the published openai entry in the catalog OpenCode uses ($1.75 input, $14 output, $0.175 cached input per million tokens).",
+    "codex-auto-review has no published rate anywhere; it is marked internal so its tokens are excluded from the unpriced warning without inventing a price."
+  ],
+  "models": {
+    "codex/gpt-5.3-codex-spark": {
+      "input_cost_per_token": 0.00000175,
+      "output_cost_per_token": 0.000014,
+      "cache_read_input_token_cost": 0.000000175
+    },
+    "codex/codex-auto-review": {
+      "internal": true
+    }
+  }
+}
