@@ -14,7 +14,7 @@ Requires Omarchy 4 with Quickshell, Python 3.11+, and a systemd user session. Ol
 curl -fsSL https://raw.githubusercontent.com/btsouth/omarchy-usage-dashboard/main/install.sh | bash -s -- --with-plugin
 ```
 
-Drop `--with-plugin` for the dashboard without the bar widget. Pin a release with `OMARCHY_USAGE_REF=v1.1.0` in front of the command. Installing from a checkout also works:
+Drop `--with-plugin` for the dashboard without the bar widget. Pin a release with `OMARCHY_USAGE_REF=v1.1.1` in front of the command. Installing from a checkout also works:
 
 ```sh
 git clone https://github.com/btsouth/omarchy-usage-dashboard.git

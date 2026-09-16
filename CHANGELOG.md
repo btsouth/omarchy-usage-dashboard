@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1 - 2026-09-15
+
+- Follow Omarchy theme swaps live again: the dashboard watches the stable theme directory, which survives the swap that replaces it by rename.
+- Repaint theme changes from a fast palette read instead of a full history scan, removing the two to three second lag after `omarchy theme set`.
+- Derive the Pi provider color from the theme's bright foreground, since no shipped theme defines `bright_white`.
+- Let the demo enable a subset of agents with `--agents` for quieter screenshots.
+
 ## 1.1.0 - 2026-09-15
 
 - Synced machine ledgers: point every machine at one shared folder and each imports the others' snapshots, so totals, charts, and model breakdowns cover all of them.
