@@ -182,6 +182,14 @@ Scope {
     }
     Timer { interval: 300000; repeat: true; running: window.visible; onTriggered: root.refresh() }
     FileView {
+        // current/ is stable while omarchy theme set replaces current/theme by
+        // rename, so this watcher keeps firing after each swap. The file
+        // watchers below only survive in-place edits.
+        path: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME")+"/.local/state")+"/omarchy/current"
+        watchChanges: true; printErrors: false
+        onFileChanged: root.refresh()
+    }
+    FileView {
         path: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME")+"/.local/state")+"/omarchy/current/theme/colors.toml"
         watchChanges: true; printErrors: false
         onFileChanged: root.refresh()
