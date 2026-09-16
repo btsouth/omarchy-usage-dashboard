@@ -87,7 +87,7 @@ Scope {
     function accountColor(provider, shade) {
         var base = colorFor(provider)
         if (!shade) return base
-        var factor = 1 + 0.3 * shade
+        var factor = Math.min(1.6, 1 + 0.5 * shade)
         return luminance(root.base) > 0.179 ? Qt.darker(base, factor) : Qt.lighter(base, factor)
     }
     function compact(n) {
