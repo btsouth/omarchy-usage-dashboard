@@ -11,6 +11,7 @@
 - Refresh Grok quota after login and request fresh limits on manual Refresh.
 - Reopen unmapped dashboard windows and focus the correct instance across workspaces.
 - Keep provider colors readable on light and dark backgrounds.
+- Wrap bar-widget provider chips when many sources are enabled.
 
 ## Initial package
 
