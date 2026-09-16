@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 - 2026-09-15
 
 - Named history accounts with multiple folders, account comparisons, and filters.
 - Deduplicate mirrored history and flag conflicting account assignments.

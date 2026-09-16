@@ -11,6 +11,12 @@ Token trends, account comparisons, usage limits, and estimated API value for AI 
 Requires Omarchy 4 with Quickshell, Python 3.11+, and a systemd user session. Older Waybar-based versions are not supported.
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/btsouth/omarchy-usage-dashboard/main/install.sh | bash -s -- --with-plugin
+```
+
+Drop `--with-plugin` for the dashboard without the bar widget. Pin a release with `OMARCHY_USAGE_REF=v1.0.0` in front of the command. Installing from a checkout also works:
+
+```sh
 git clone https://github.com/btsouth/omarchy-usage-dashboard.git
 cd omarchy-usage-dashboard
 python3 install.py --with-plugin
@@ -87,18 +93,17 @@ Metrics stay on your machine. The ledger stores counters, model names, project p
 
 ## Update
 
-From the checkout, run:
+Re-run the install command to update:
 
 ```sh
-git pull --ff-only
-python3 install.py --with-plugin
+curl -fsSL https://raw.githubusercontent.com/btsouth/omarchy-usage-dashboard/main/install.sh | bash -s -- --with-plugin
 ```
 
-Omit `--with-plugin` if you installed without the bar widget. Updates preserve your history and preferences and stop before overwriting installed files you have edited.
+From a checkout, use `git pull --ff-only` and `python3 install.py --with-plugin` instead. Omit `--with-plugin` if you installed without the bar widget. Updates preserve your history and preferences and stop before overwriting installed files you have edited.
 
 ## Uninstall
 
-Quit the dashboard with **Ctrl+Q**, then run from the checkout:
+Quit the dashboard with **Ctrl+Q**, then run from the checkout or the archive:
 
 ```sh
 python3 install.py --uninstall

@@ -31,6 +31,7 @@ class InstallationTests(unittest.TestCase):
             registry=home/'state'/APP/'installation.json';before=registry.read_bytes()
             runtime=home/'data'/APP/'app';self.assertTrue((runtime/'catalog.json').exists())
             self.assertTrue((runtime/'muse-pricing.json').exists())
+            self.assertTrue((runtime/'codex-pricing.json').exists())
             run('--with-plugin');self.assertEqual(before,registry.read_bytes())
             launcher=home/'.local/bin'/APP
             self.assertEqual(shlex.split(launcher.read_text().splitlines()[1])[1],str(runtime/"launch.sh"))
