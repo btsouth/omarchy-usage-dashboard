@@ -105,7 +105,15 @@ Re-run the install command to update:
 curl -fsSL https://raw.githubusercontent.com/btsouth/omarchy-usage-dashboard/main/install.sh | bash -s -- --with-plugin
 ```
 
-From a checkout, use `git pull --ff-only` and `python3 install.py --with-plugin` instead. Omit `--with-plugin` if you installed without the bar widget. Updates preserve your history and preferences and stop before overwriting installed files you have edited.
+From a checkout, use `git pull --ff-only` and `python3 install.py --with-plugin` instead. Omit `--with-plugin` if you installed without the bar widget. Updates preserve your history and preferences.
+
+The updater refuses to overwrite a file you have edited yourself, and stops before changing anything else, so one local edit blocks the whole update. It names the file it stopped on. Move that file aside and re-run:
+
+```sh
+mv ~/.local/share/omarchy-usage-dashboard/app/collector.py ~/collector.py.mine
+```
+
+The update then completes and installs the current copy. Your version stays where you moved it, so you can compare or reapply it.
 
 ## Uninstall
 
