@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 - 2026-09-17
 
 - CommandCode usage: plan windows read from an API key you supply, with the resets they publish. Its allowance is measured in credit value rather than tokens (GOAT allows $14 in any 5 hours, $35 in any 7 days, and $70 a month), and each window reports its own spend, cap, and reset time, so these meters carry a countdown where the other providers cannot. Add the key under **Settings**, or export `COMMANDCODE_API_KEY`, or drop it in `~/.config/omarchy/ai-usage/commandcode.key`.
 - Count CommandCode token history through the same agent ledger as OpenCode Go and Ollama Cloud. Its two profiles for one account, one OpenAI-shaped and one Anthropic-shaped, collapse onto one card; the raw route is kept in the Routes breakdown.
