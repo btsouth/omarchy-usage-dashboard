@@ -211,7 +211,7 @@ Item {
   }
 
   function providerEnabled(id) {
-    if (["codex", "claude", "opencode-go", "grok", "gemini", "opencode", "pi", "omp", "muse", "ollama-cloud"].indexOf(id) < 0) return false
+    if (["codex", "claude", "opencode-go", "grok", "gemini", "opencode", "pi", "omp", "muse", "ollama-cloud", "commandcode"].indexOf(id) < 0) return false
     if (!settings || !settings.providers || !settings.providers[id]) return true
     return settings.providers[id].enabled !== false
   }

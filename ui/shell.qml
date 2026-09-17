@@ -58,6 +58,7 @@ Scope {
     // The stored key never reaches this window; the report sends a mask, so
     // an untouched field means "keep what is stored" rather than an edit.
     property string draftOllamaKey: ""
+    property string draftCommandCodeKey: ""
     property string saveError: ""
     property var homeOptions: [
         {key:"codexHomes",name:"Codex homes",example:"/mnt/other-computer/.codex"},
@@ -84,7 +85,8 @@ Scope {
             "opencode-go": palette.bright_yellow || "#e5c736", grok: palette.bright_blue || "#9cb8db",
             gemini: palette.bright_magenta || "#c6a0d5", opencode: palette.bright_green || "#a7c080",
             pi: palette.bright_white || palette.bright_foreground || "#d4d4d4", omp: palette.red || "#d88b68",
-            muse: palette.blue || "#7aa2f7", "ollama-cloud": palette.orange || "#a2734b"})[id] || root.ink
+            muse: palette.blue || "#7aa2f7", "ollama-cloud": palette.orange || "#a2734b",
+            "commandcode": palette.bright_green || "#a7c080"})[id] || root.ink
         var color=Qt.darker(raw,1), background=luminance(root.base)
         for (var i=0;i<16;i++) {
             var value=luminance(color)
@@ -146,6 +148,7 @@ Scope {
         draftLedgerSyncDir = s.ledgerSyncDir || ""
         draftLedgerDeviceId = s.ledgerDeviceId || ""
         draftOllamaKey = s.ollamaApiKey || ""
+        draftCommandCodeKey = s.commandcodeApiKey || ""
         var prices = {}, homes = {}
         providerOptions.forEach(p => prices[p.id] = s.monthlyPrices && s.monthlyPrices[p.id] !== undefined ? String(s.monthlyPrices[p.id]) : "")
         draftAccounts.forEach(a => prices[a.id] = s.monthlyPrices && s.monthlyPrices[a.id] !== undefined ? String(s.monthlyPrices[a.id]) : "")
@@ -166,7 +169,7 @@ Scope {
         }
         saveError = ""
         var s = {accounts: draftAccounts, localAccountLabel: draftLocalLabel, enabled: draftEnabled, monthlyPrices: prices, windowOpacity: opacitySlider.value,
-                 ledgerSyncDir: draftLedgerSyncDir, ledgerDeviceId: draftLedgerDeviceId, ollamaApiKey: draftOllamaKey}
+                 ledgerSyncDir: draftLedgerSyncDir, ledgerDeviceId: draftLedgerDeviceId, ollamaApiKey: draftOllamaKey, commandcodeApiKey: draftCommandCodeKey}
         homeOptions.forEach(h => s[h.key] = (draftHomes[h.key] || "").split("\n").filter(x => x.trim()).map(x => x.trim()))
         save.command = ["python3", helper, "settings", "--save"]
         save.payload = JSON.stringify(s)
@@ -886,6 +889,9 @@ Scope {
                     Label { text: "Ollama Cloud API key"; font.pixelSize: 16 }
                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Optional. Only needed to show Ollama Cloud usage limits; local token history works without it. Leave blank to use the environment or the key file." }
                     Field { width: 420; text: root.draftOllamaKey; placeholderText: "Not set"; echoMode: TextInput.Password; onTextEdited: root.draftOllamaKey = text; Accessible.name: "Ollama Cloud API key" }
+                    Label { text: "CommandCode API key"; font.pixelSize: 16 }
+                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Optional. Only needed to show CommandCode plan usage; token history comes from Hermes and works without it. Leave blank to use the environment or ~/.config/omarchy/ai-usage/commandcode.key." }
+                    Field { width: 420; text: root.draftCommandCodeKey; placeholderText: "Not set"; echoMode: TextInput.Password; onTextEdited: root.draftCommandCodeKey = text; Accessible.name: "CommandCode API key" }
                     Label { text: "History accounts"; font.pixelSize: 16 }
                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Label agent home folders by account. Keep mirrored folders under the same account. Labels do not switch logins; quota is only for the current login on this PC." }
                     Field { width: 260; text: root.draftLocalLabel; placeholderText: "Local account name"; onTextEdited: root.draftLocalLabel = text; Accessible.name: "Local account name" }
@@ -919,7 +925,7 @@ Scope {
                     Choice { text: "Add account"; onClicked: { root.draftAccounts=root.draftAccounts.concat([{id:"account-"+Date.now()+"-"+Math.random().toString(36).slice(2,8),label:"",directories:[{provider:"codex",path:""}]}]) } }
                     Label { text: "Unlabelled additional history folders"; font.pixelSize: 16 }
                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: "One full home-folder path per line, such as /mnt/other-computer/.codex. Use folders you have already mounted or synced. No remote connection is made. Copies with stable session IDs are deduplicated." }
-                    Repeater { model: root.homeOptions.filter(h => root.draftEnabled.indexOf(h.key.replace(/Homes$/, ""))>=0 || (h.key === "opencodeHomes" && root.draftEnabled.indexOf("opencode-go")>=0) || (h.key === "hermesHomes" && (root.draftEnabled.indexOf("opencode-go")>=0 || root.draftEnabled.indexOf("ollama-cloud")>=0)))
+                    Repeater { model: root.homeOptions.filter(h => root.draftEnabled.indexOf(h.key.replace(/Homes$/, ""))>=0 || (h.key === "opencodeHomes" && root.draftEnabled.indexOf("opencode-go")>=0) || (h.key === "hermesHomes" && ["opencode-go", "ollama-cloud", "commandcode"].some(id => root.draftEnabled.indexOf(id) >= 0)))
                         Column {
                             required property var modelData
                             width: parent.width; spacing: 6

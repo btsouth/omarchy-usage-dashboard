@@ -974,6 +974,75 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(ledger.db.execute('SELECT COUNT(*),SUM(input) FROM events').fetchone(), (2, 1000))
         ledger.db.close()
 
+    def test_commandcode_wire_variants_collapse_onto_one_provider(self):
+        # Hermes has two profiles for the same product (OpenAI-shaped and
+        # Anthropic-shaped) with the same key and account. One account must not
+        # become two providers.
+        path = self.hermes_ledger([
+            {'billing_provider': 'commandcode', 'model': 'deepseek/deepseek-v4-pro',
+             'billing_base_url': 'https://api.commandcode.ai/provider/v1', 'input_tokens': 1000, 'output_tokens': 100},
+            {'billing_provider': 'commandcode-anthropic', 'model': 'claude-sonnet-4-6',
+             'billing_base_url': 'https://api.commandcode.ai/provider/v1', 'input_tokens': 500, 'output_tokens': 50}])
+        rows = [item['row'] for item in c.hermes_records(path)]
+        self.assertEqual({r['provider'] for r in rows}, {'commandcode'})
+        # The raw route survives on apiProvider for the Routes breakdown.
+        self.assertEqual({r['apiProvider'] for r in rows}, {'commandcode', 'commandcode-anthropic'})
+        # Distinct models stay distinct rows.
+        self.assertEqual(len(rows), 2)
+
+    def test_commandcode_quota_reads_its_windows_and_resets(self):
+        # The endpoint reports money-valued windows with a reset each; the
+        # monthly cap is only knowable as remaining credits plus what the
+        # period spent, so the two responses are combined.
+        payloads = {
+            '/alpha/billing/credits': {'credits': {'monthlyCredits': 69.5},
+                                       'windowLimits': {'fiveHour': {'used': 3.5, 'cap': 14, 'resetAt': 1789666587497},
+                                                        'weekly': {'used': 3.5, 'cap': 35, 'resetAt': 1790253387497}}},
+            '/alpha/billing/subscriptions': {'data': {'planId': 'individual-goat',
+                                                      'currentPeriodEnd': '2026-10-17T12:08:37.000Z'}},
+            '/alpha/usage/summary': {'totalCredits': 0.5}}
+        with patch.dict('os.environ', {'COMMANDCODE_API_KEY': 'test-cc-key',
+                                       'XDG_CONFIG_HOME': str(self.root / 'config'),
+                                       'XDG_DATA_HOME': str(self.root / 'data')}), \
+             patch.object(c, 'commandcode_call', side_effect=lambda key, path: payloads[path]):
+            result = c.commandcode_quota(force=True)
+        self.assertEqual(result['error'], '')
+        self.assertEqual(result['plan'], 'GOAT')
+        by = {limit['label']: limit for limit in result['limits']}
+        self.assertAlmostEqual(by['5 hours']['percent'], 0.25, places=6)
+        self.assertAlmostEqual(by['Weekly']['percent'], 0.1, places=6)
+        # 0.5 spent of a 70 allowance (69.5 remaining + 0.5 spent).
+        self.assertAlmostEqual(by['Monthly']['percent'], 0.5 / 70, places=6)
+        # A reset time is rendered as ISO, which is what the panel reads.
+        self.assertTrue(by['5 hours']['resetsAt'].startswith('2026-09-'))
+        self.assertTrue(by['Monthly']['resetsAt'].startswith('2026-10-17'))
+
+    def test_commandcode_quota_survives_a_missing_subscription(self):
+        credits = {'credits': {'monthlyCredits': 70.0},
+                   'windowLimits': {'fiveHour': {'used': 0.0, 'cap': 14, 'resetAt': 1789666587497}}}
+        def call(key, path):
+            if path == '/alpha/billing/credits': return credits
+            if path == '/alpha/usage/summary': return {'totalCredits': 0.0}
+            raise ValueError('unavailable')
+        with patch.dict('os.environ', {'COMMANDCODE_API_KEY': 'test-cc-key',
+                                       'XDG_CONFIG_HOME': str(self.root / 'config'),
+                                       'XDG_DATA_HOME': str(self.root / 'data')}), \
+             patch.object(c, 'commandcode_call', side_effect=call):
+            result = c.commandcode_quota(force=True)
+        # The windows still render even when the plan lookup fails.
+        self.assertEqual(result['error'], '')
+        self.assertEqual([limit['label'] for limit in result['limits']], ['5 hours', 'Monthly'])
+        self.assertEqual(result['plan'], '')
+
+    def test_commandcode_quota_errors_do_not_expose_the_key(self):
+        with patch.dict('os.environ', {'COMMANDCODE_API_KEY': 'sk-secret-cc-value',
+                                       'XDG_CONFIG_HOME': str(self.root / 'config'),
+                                       'XDG_DATA_HOME': str(self.root / 'data')}), \
+             patch.object(c.urllib.request, 'urlopen', side_effect=OSError('boom')):
+            result = c.commandcode_quota(force=True)
+        self.assertNotIn('sk-secret-cc-value', json.dumps(result))
+        self.assertIn('unavailable', result['error'])
+
     def test_settings_accepts_a_stdin_payload_and_masks_the_reply(self):
         # The UI sends the payload on stdin so a key never reaches argv.
         env = dict(os.environ, XDG_CONFIG_HOME=str(self.root / 'config'), XDG_STATE_HOME=str(self.root / 'state'))
@@ -983,7 +1052,7 @@ class CollectorTests(unittest.TestCase):
             capture_output=True, text=True, env=env, cwd=str(self.root))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('stdin-key', result.stdout)
-        self.assertEqual(json.loads(result.stdout)['ollamaApiKey'], c.OLLAMA_KEY_MASK)
+        self.assertEqual(json.loads(result.stdout)['ollamaApiKey'], c.API_KEY_MASK)
         stored = json.loads((self.root / 'config/omarchy/ai-usage/settings.json').read_text())
         self.assertEqual(stored['ollamaApiKey'], 'stdin-key')
 
@@ -1016,12 +1085,12 @@ class CollectorTests(unittest.TestCase):
             saved = c.save_settings(c.DEFAULTS | {'enabled': ['ollama-cloud'], 'ollamaApiKey': 'typed-key'})
             self.assertEqual(saved['ollamaApiKey'], 'typed-key')
             # The report round trip carries the mask; saving it back keeps the key.
-            again = c.save_settings(c.DEFAULTS | saved | {'ollamaApiKey': c.OLLAMA_KEY_MASK})
+            again = c.save_settings(c.DEFAULTS | saved | {'ollamaApiKey': c.API_KEY_MASK})
             self.assertEqual(again['ollamaApiKey'], 'typed-key')
             ledger = c.Ledger(self.root / 'mask.sqlite')
             with patch.object(c, 'quota', return_value={'limits': []}), patch.object(c, 'account_quotas', return_value=({}, {})), patch.object(c, 'theme', return_value={}):
                 data = c.report(ledger, c.settings() | {'enabled': ['ollama-cloud']}, days=7)
-            self.assertEqual(data['settings']['ollamaApiKey'], c.OLLAMA_KEY_MASK)
+            self.assertEqual(data['settings']['ollamaApiKey'], c.API_KEY_MASK)
             ledger.db.close()
 
 

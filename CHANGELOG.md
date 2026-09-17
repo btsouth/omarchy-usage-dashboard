@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- CommandCode usage: plan windows read from an API key you supply, with the resets they publish. Its allowance is measured in credit value rather than tokens (GOAT allows $14 in any 5 hours, $35 in any 7 days, and $70 a month), and each window reports its own spend, cap, and reset time, so these meters carry a countdown where the other providers cannot. Add the key under **Settings**, or export `COMMANDCODE_API_KEY`, or drop it in `~/.config/omarchy/ai-usage/commandcode.key`.
+- Count CommandCode token history through the same agent ledger as OpenCode Go and Ollama Cloud. Its two profiles for one account, one OpenAI-shaped and one Anthropic-shaped, collapse onto one card; the raw route is kept in the Routes breakdown.
+- CommandCode model rates, transcribed from its own resale table rather than the labs' list prices, with its published peak window for the DeepSeek models. Free-while-capacity-lasts models price at zero instead of staying unpriced.
+- One row of provider tabs: the chips share the width evenly and keep their own text width, so four or five providers sit on one line instead of wrapping, and the panel has more room on both sides.
+
 ## 1.2.0 - 2026-09-17
 
 - Ollama Cloud usage: local token history alongside the plan's usage limits, read from an API key you supply. Add it under **Settings**, or export `OLLAMA_API_KEY`, or drop a key in `~/.config/omarchy/ai-usage/ollama.key`. The key is never written back, never leaves the request it authenticates, and never appears in anything the dashboard renders.

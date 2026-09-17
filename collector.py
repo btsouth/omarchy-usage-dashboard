@@ -26,13 +26,16 @@ STATE = Path(os.getenv('XDG_STATE_HOME', HOME / '.local/state')) / 'omarchy/ai-u
 CONFIG = Path(os.getenv('XDG_CONFIG_HOME', HOME / '.config')) / 'omarchy/ai-usage/settings.json'
 PROVIDERS = {'codex': 'Codex', 'claude': 'Claude', 'opencode-go': 'OpenCode Go', 'grok': 'Grok Build',
              'gemini': 'Gemini CLI', 'opencode': 'OpenCode', 'pi': 'Pi', 'omp': 'Oh My Pi', 'muse': 'Muse',
-             'ollama-cloud': 'Ollama Cloud'}
+             'ollama-cloud': 'Ollama Cloud', 'commandcode': 'CommandCode'}
 HOME_KEYS = ('codexHomes', 'claudeHomes', 'grokHomes', 'geminiHomes', 'opencodeHomes', 'piHomes', 'ompHomes',
              'museHomes', 'hermesHomes')
 # Provider ids used by the Hermes agent's own per-model usage table. Hermes
 # bills the same routes this dashboard reads elsewhere, so its ledger is a
-# source, not a separate provider.
-HERMES_ROUTES = ('opencode-go', 'ollama-cloud')
+# source, not a separate provider. Two of these are the same product reached
+# over different wire formats, so they map onto one dashboard provider: an
+# account is not two accounts because one call used the Anthropic shape.
+HERMES_ROUTES = ('opencode-go', 'ollama-cloud', 'commandcode', 'commandcode-anthropic')
+HERMES_ROUTE_NAMES = {'commandcode-anthropic': 'commandcode'}
 HERMES_TASKS = {'': 'conversation', 'title_generation': 'title generation', 'background_review': 'background review',
                 'approval': 'approval', 'compression': 'context compression', 'vision': 'vision',
                 'embedding': 'embedding'}
@@ -41,17 +44,20 @@ HERMES_TASKS = {'': 'conversation', 'title_generation': 'title generation', 'bac
 OLLAMA_WINDOWS = {'session': 'Session (5-hour)', 'weekly': 'Weekly (7-day)', 'monthly': 'Monthly'}
 # Stands in for a stored key in reports so the settings form can show that one
 # exists without sending it back over the report channel. Never a valid key.
-OLLAMA_KEY_MASK = 'stored'
+# One mask covers every provider's key field, since the form only needs to know
+# that something is stored.
+API_KEY_MASK = 'stored'
 DEFAULTS = {'enabled': ['codex', 'claude', 'opencode-go'], 'monthlyPrices': {},
             **{key: [] for key in HOME_KEYS}, 'accounts': [], 'localAccountLabel': 'Local', 'windowOpacity': 0.985,
-            'ledgerSyncDir': '', 'ledgerDeviceId': '', 'ollamaApiKey': ''}
+            'ledgerSyncDir': '', 'ledgerDeviceId': '', 'ollamaApiKey': '', 'commandcodeApiKey': ''}
 FIELDS = ('input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h', 'reasoning')
 # Bundled official rate tables merged over the catalog, in order. User
 # rates.json entries still win over every file listed here.
 OVERRIDES = (('pricing.json', 'OpenCode Go official rates'),
              ('muse-pricing.json', 'Muse official rates'),
              ('codex-pricing.json', 'Codex model rates'),
-             ('ollama-pricing.json', 'Ollama Cloud model rates'))
+             ('ollama-pricing.json', 'Ollama Cloud model rates'),
+             ('commandcode-pricing.json', 'CommandCode model rates'))
 
 
 def atomic_json(path, value):
@@ -86,25 +92,35 @@ def theme():
     return {'palette': palette, 'shell': shell, 'font': font}
 
 
+def masked_settings(cfg):
+    """A copy of the settings safe to hand to the UI: any stored key is
+    replaced by a mask. Derived from the key fields rather than written out at
+    each call site, so a key added later cannot be echoed by omission."""
+    return cfg | {field: (API_KEY_MASK if cfg.get(field) else '')
+                  for field in ('ollamaApiKey', 'commandcodeApiKey')}
+
+
 def save_settings(value):
     clean = {'enabled': [p for p in value.get('enabled', []) if p in PROVIDERS],
              'monthlyPrices': {}, **{key: [] for key in HOME_KEYS},
              'accounts': [], 'localAccountLabel': str(value.get('localAccountLabel') or 'Local').strip(),
              'ledgerSyncDir': '', 'ledgerDeviceId': str(value.get('ledgerDeviceId') or '').strip(),
              'ollamaApiKey': str(value.get('ollamaApiKey') or '').strip(),
+             'commandcodeApiKey': str(value.get('commandcodeApiKey') or '').strip(),
              'windowOpacity': max(0.55, min(1.0, float(value.get('windowOpacity', 0.985))))}
     # The user's own key beats the environment and the key file, since typing
-    # one in is deliberate. Settings stay nonsecret by default; this value is
-    # the exception and is never echoed back over the settings channel.
-    if 'ollamaApiKey' not in value:
-        # A client that does not send the field at all means "leave it alone",
-        # not "clear it". The form sends the mask when the field is untouched.
-        clean['ollamaApiKey'] = str(settings().get('ollamaApiKey') or '')
-    elif clean['ollamaApiKey'] == OLLAMA_KEY_MASK:
-        # A report round trip carries the mask, not the key, so an unchanged
-        # field means "keep whatever is stored" rather than a literal edit.
-        clean['ollamaApiKey'] = str(settings().get('ollamaApiKey') or '')
-    if len(clean['ollamaApiKey']) > 200: raise ValueError('Give the Ollama Cloud API key 200 characters or fewer.')
+    # one in is deliberate. Settings stay nonsecret by default; these values
+    # are the exception and are never echoed back over the settings channel.
+    for field, mask, limit in (('ollamaApiKey', API_KEY_MASK, 200), ('commandcodeApiKey', API_KEY_MASK, 200)):
+        if field not in value:
+            # A client that does not send the field at all means "leave it
+            # alone", not "clear it". The form sends the mask when untouched.
+            clean[field] = str(settings().get(field) or '')
+        elif clean[field] == mask:
+            # A report round trip carries the mask, not the key, so an
+            # unchanged field means "keep whatever is stored".
+            clean[field] = str(settings().get(field) or '')
+        if len(clean[field]) > limit: raise ValueError('Give the API key 200 characters or fewer.')
     if str(value.get('ledgerSyncDir') or '').strip():
         clean['ledgerSyncDir'] = str(Path(str(value['ledgerSyncDir'])).expanduser().absolute())
     if len(clean['ledgerDeviceId']) > 80: raise ValueError('Give the ledger device id 80 characters or fewer.')
@@ -419,7 +435,10 @@ def hermes_records(path):
         wanted = ','.join('?' for _ in HERMES_ROUTES)
         for row in conn.execute(f'SELECT * FROM session_model_usage WHERE billing_provider IN ({wanted})', HERMES_ROUTES):
             r = dict(row)
-            provider = r['billing_provider']
+            # Collapse the wire-format variants onto one provider, keeping the
+            # raw route on apiProvider for the Routes breakdown.
+            route = r['billing_provider']
+            provider = HERMES_ROUTE_NAMES.get(route, route)
             session, model = str(r['session_id']), r['model'] or 'unknown'
             task = str(r.get('task') or '')
             # Anchor the row at its first sighting. The table accumulates in
@@ -433,14 +452,14 @@ def hermes_records(path):
             # exceeds output in 59% of its rows. The row's id covers every key
             # of the source table's primary key so two distinct rows cannot
             # collapse and lose tokens under the ledger's MAX upsert.
-            entry = record(digest('hermes', provider, session, model, task,
+            entry = record(digest('hermes', route, session, model, task,
                                   r.get('billing_base_url'), r.get('billing_mode')),
                            provider, session, ts, model,
                            projects.get(r['session_id']) or '', 'Hermes',
                            input=r.get('input_tokens'), output=r.get('output_tokens'),
                            reasoning=r.get('reasoning_tokens'), cacheRead=r.get('cache_read_tokens'),
                            cacheWrite=r.get('cache_write_tokens'))
-            entry['apiProvider'] = provider
+            entry['apiProvider'] = route
             entry['modelCalls'] = number(r.get('api_call_count'))
             entry['reportedValue'] = reported_value(r.get('estimated_cost_usd'))
             yield {'row': entry, 'task': HERMES_TASKS.get(task, task or 'conversation')}
@@ -720,7 +739,12 @@ def price(r, catalog):
     fallback = r.get('reportedValue') if r['provider'] == 'opencode-go' else None
     fallback = (fallback, None) if fallback is not None else (None, None)
     model = r['model']
-    rate = catalog.get((r.get('apiProvider') or r['provider']) + '/' + model) or catalog.get(model) or catalog.get('anthropic/' + model) or catalog.get('openai/' + model) or catalog.get('gemini/' + model)
+    lookup = (r.get('apiProvider') or r['provider']) + '/' + model
+    # CommandCode bills one resale table for the whole product, so both of its
+    # wire-format routes read the same namespaced keys rather than falling
+    # through to the lab's own list price for a same-named model.
+    if r['provider'] == 'commandcode': lookup = 'commandcode/' + model
+    rate = catalog.get(lookup) or catalog.get(model) or catalog.get('anthropic/' + model) or catalog.get('openai/' + model) or catalog.get('gemini/' + model)
     if not rate: return fallback
     # Internal models have no published rate and are not billed per token.
     if rate.get('internal'): return 0.0, None
@@ -813,12 +837,13 @@ def account_quotas():
 def quota(provider):
     if provider in ('opencode', 'pi', 'omp'):
         return {'limits': [], 'error': 'Account limits belong to the underlying provider and are not collected here.'}
-    if provider in ('opencode-go', 'grok', 'muse', 'ollama-cloud'):
+    if provider in ('opencode-go', 'grok', 'muse', 'ollama-cloud', 'commandcode'):
         try: d = json.loads((STATE / {'opencode-go': 'go-quota.json', 'grok': 'grok-quota.json', 'muse': 'muse-quota.json',
-                                      'ollama-cloud': 'ollama-quota.json'}[provider]).read_text())
+                                      'ollama-cloud': 'ollama-quota.json',
+                                      'commandcode': 'commandcode-quota.json'}[provider]).read_text())
         except (OSError, ValueError): d = {}
         result = {'limits': d.get('limits', []), 'updatedAt': d.get('updatedAt'), 'error': d.get('error', '')}
-        if provider in ('muse', 'ollama-cloud'): result['plan'] = d.get('plan', '')
+        if provider in ('muse', 'ollama-cloud', 'commandcode'): result['plan'] = d.get('plan', '')
         return result
     p = STATE.parent / 'agents/usage' / (provider + '.json')
     try:
@@ -1033,6 +1058,103 @@ def ollama_quota(force=False):
     return cached
 
 
+def commandcode_key(cfg=None):
+    """CommandCode API key, preferring one the user supplied over one the
+    machine happens to export. Nothing here writes or refreshes credentials."""
+    cfg = settings() if cfg is None else cfg
+    typed = str(cfg.get('commandcodeApiKey') or '').strip()
+    if typed: return typed
+    from_env = str(os.getenv('COMMANDCODE_API_KEY') or '').strip()
+    if from_env: return from_env
+    for path in (config_dir() / 'commandcode.key',):
+        try: value = path.read_text().strip()
+        except OSError: continue
+        if value: return value
+    return ''
+
+
+def commandcode_call(key, path):
+    """One read-only GET against CommandCode's own endpoints. The key rides in
+    a header; nothing here writes, refreshes, or logs a credential."""
+    request = urllib.request.Request('https://api.commandcode.ai' + path,
+        headers={'Authorization': 'Bearer ' + key, 'Accept': 'application/json',
+                 'User-Agent': 'Omarchy-AI-Usage/0.1'})
+    with urllib.request.urlopen(request, timeout=12) as response:
+        data = json.load(response)
+    if not isinstance(data, dict): raise ValueError('CommandCode returned an unrecognized usage response.')
+    return data
+
+
+def commandcode_quota(force=False):
+    """CommandCode measures its allowance in credit value, not tokens: GOAT
+    allows $14 in any 5 hours, $35 in any 7 days, and $70 a month. The windows
+    carry a reset time each, and the subscription carries the billing period
+    end, so unlike the other providers this card can show countdowns.
+
+    Every figure is read from the API rather than assumed: the monthly cap is
+    the remaining credits plus what this period has spent, which the endpoints
+    agree on exactly, so a plan change needs no code change."""
+    path = STATE / 'commandcode-quota.json'
+    key = commandcode_key()
+    key_file = config_dir() / 'commandcode.key'
+    try:
+        stat = key_file.stat()
+        key_version = [stat.st_mtime_ns, stat.st_size]
+    except OSError: key_version = None
+    key_version = {'file': key_version,
+                   'key': hashlib.sha256(key.encode()).hexdigest()[:16] if key else None}
+    try: cached = json.loads(path.read_text())
+    except (OSError, ValueError): cached = {}
+    if not force and cached.get('keyVersion') == key_version and time.time() - cached.get('attemptedAt', 0) < 300: return cached
+    try:
+        if not key: raise QuotaUnavailable('Add a CommandCode API key in Settings to read its usage.')
+        credits = commandcode_call(key, '/alpha/billing/credits')
+        windows = credits.get('windowLimits') or {}
+        limits = []
+        # The endpoints express resets differently: the windows use epoch
+        # milliseconds, the subscription an ISO string. Normalise to ISO, which
+        # is what the panel's countdown reads.
+        for name, label in (('fiveHour', '5 hours'), ('weekly', 'Weekly')):
+            window = windows.get(name)
+            if not isinstance(window, dict): continue
+            used, cap = window.get('used'), window.get('cap')
+            if not isinstance(used, (int, float)) or not isinstance(cap, (int, float)) or cap <= 0: continue
+            reset = window.get('resetAt')
+            limits.append({'label': label, 'percent': min(1.0, max(0.0, used / cap)),
+                           'raw': used / cap,
+                           'resetsAt': dt.datetime.fromtimestamp(timestamp(reset), dt.timezone.utc).isoformat() if timestamp(reset) else ''})
+        monthly = (credits.get('credits') or {}).get('monthlyCredits')
+        reset_at = ''
+        plan = ''
+        try:
+            subscription = (commandcode_call(key, '/alpha/billing/subscriptions').get('data') or {})
+            plan_id = subscription.get('planId')
+            if isinstance(plan_id, str) and plan_id:
+                # "individual-goat" reads as "GOAT" on the card.
+                plan = plan_id.split('-')[-1].upper()
+            reset_at = str(subscription.get('currentPeriodEnd') or '')
+        except Exception: pass
+        if isinstance(monthly, (int, float)):
+            # What this billing period has spent, from the same source the CLI
+            # shows. Remaining + spent is the period's allowance.
+            try: spent = commandcode_call(key, '/alpha/usage/summary').get('totalCredits')
+            except Exception: spent = None
+            if isinstance(spent, (int, float)):
+                cap = monthly + spent
+                if cap > 0:
+                    limits.append({'label': 'Monthly', 'percent': min(1.0, max(0.0, spent / cap)),
+                                   'raw': spent / cap, 'resetsAt': reset_at})
+        if not limits: raise ValueError('CommandCode returned no recognized usage windows.')
+        cached = {'limits': limits, 'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(), 'error': '', 'plan': plan}
+    except Exception as exc:
+        # Never quote a credential-bearing request object, URL, or body.
+        cached['error'] = str(exc) if isinstance(exc, QuotaUnavailable) else 'CommandCode usage unavailable. Check the API key.'
+    cached['attemptedAt'] = time.time()
+    cached['keyVersion'] = key_version
+    atomic_json(path, cached)
+    return cached
+
+
 def account_assignments(ledger, cfg):
     labels = {'local': cfg.get('localAccountLabel', 'Local'), 'unassigned': 'Unassigned history', 'conflict': 'Needs review'}
     roots = []
@@ -1236,7 +1358,7 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
             # Reports reach the bar panel and the dashboard window. The key
             # comes back masked so the settings form can show that one is
             # stored without echoing it.
-            'settings': cfg | {'ollamaApiKey': OLLAMA_KEY_MASK if cfg.get('ollamaApiKey') else ''}, 'theme': theme()}
+            'settings': masked_settings(cfg), 'theme': theme()}
 
 
 def write_agent_record(ledger, provider):
@@ -1251,7 +1373,7 @@ def write_agent_record(ledger, provider):
     today_data = next((x['providers'][provider] for x in data['daily'] if x['date'] == today), finish(bucket()))
     record_data = {'schemaVersion': 1, 'id': provider, 'name': PROVIDERS[provider],
        'updatedAt': q.get('updatedAt'), 'ready': bool(q.get('limits') or total_records), 'hasLocalStats': True,
-       'hasPromptStats': False, 'tierLabel': 'Go' if provider == 'opencode-go' else q.get('plan', '') if provider in ('muse', 'ollama-cloud') else '', 'limits': q.get('limits', []), 'usageStatusText': q.get('error', ''),
+       'hasPromptStats': False, 'tierLabel': 'Go' if provider == 'opencode-go' else q.get('plan', '') if provider in ('muse', 'ollama-cloud', 'commandcode') else '', 'limits': q.get('limits', []), 'usageStatusText': q.get('error', ''),
        'todayTotalTokens': today_data['tokens'], 'todayPrompts': today_data['requests'], 'todaySessions': today_data['sessions'],
        'totalPrompts': total_records, 'totalSessions': total_sessions,
        'activeDays': len(active_dates), 'activeDates': active_dates,
@@ -1288,7 +1410,7 @@ def main():
             # one place the key could leak back out through stdout. Every
             # answer masks it, as the usage reports already do.
             clean = save_settings(json.loads(raw)) if raw else settings()
-            print(json.dumps(clean | {'ollamaApiKey': OLLAMA_KEY_MASK if clean.get('ollamaApiKey') else ''}))
+            print(json.dumps(masked_settings(clean)))
         except (ValueError, TypeError, KeyError) as error:
             print(json.dumps({'error': str(error)})); raise SystemExit(1)
         return
@@ -1312,6 +1434,9 @@ def main():
             if args.action == 'scan' and 'ollama-cloud' in cfg['enabled']:
                 ollama_quota(args.force)
                 write_agent_record(ledger, 'ollama-cloud')
+            if args.action == 'scan' and 'commandcode' in cfg['enabled']:
+                commandcode_quota(args.force)
+                write_agent_record(ledger, 'commandcode')
             if args.action == 'scan':
                 for p in ('gemini', 'opencode', 'pi', 'omp'):
                     if p in cfg['enabled']: write_agent_record(ledger, p)
