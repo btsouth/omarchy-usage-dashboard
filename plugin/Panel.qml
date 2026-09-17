@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -383,7 +384,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(420))
+    contentWidth: panel.fittedContentWidth(Style.space(460))
     // Taller than the control panels on purpose: this one is a dashboard, and
     // the whole point is reading limits and history without scrolling.
     contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(640))
@@ -503,11 +504,19 @@ Panel {
           }
 
           // ---------- Provider switch ----------
-          Flow {
+          // One row, chips sharing the width evenly: a provider switch is a
+          // segmented control, so equal room on both sides reads as one
+          // control rather than a left-packed list with dead space beside it.
+          // Layout.fillWidth lets each chip keep its own text width as the
+          // ratio while the row absorbs the remainder, so a short label is
+          // never padded into a pill of its own. Labels are shortened because
+          // full provider names ("Ollama Cloud", "OpenCode Go") cannot share
+          // one row at this width.
+          RowLayout {
             id: providerSwitch
             visible: root.providers.length > 1
             width: parent.width
-            spacing: Style.spacing.md
+            spacing: Style.spacing.sm
 
             Repeater {
               model: root.providers
@@ -516,14 +525,17 @@ Panel {
                 required property var modelData
                 required property int index
 
-                text: modelData.providerName
+                text: ({"codex": "Main", "codex-second": "Second", "opencode-go": "OpenCode",
+                        "ollama-cloud": "Ollama"})[modelData.providerId] || modelData.providerName
                 selected: index === root.providerIndex
                 hasCursor: root.cursorActive && index === root.providerIndex
                 bordered: true
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 fontSize: Style.font.bodySmall
+                horizontalPadding: Style.spacing.controlPaddingX
                 verticalPadding: Style.spacing.controlPaddingY
+                Layout.fillWidth: true
                 onClicked: {
                   root.cursorActive = true
                   root.selectProvider(index)
