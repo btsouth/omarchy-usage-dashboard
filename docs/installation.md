@@ -6,7 +6,7 @@ The quickest install downloads the current archive and runs the same installer:
 curl -fsSL https://raw.githubusercontent.com/btsouth/omarchy-usage-dashboard/main/install.sh | bash -s -- --with-plugin
 ```
 
-`OMARCHY_USAGE_REF=v1.1.1` pins a release, and `OMARCHY_USAGE_TARBALL=/path/file.tar.gz` installs a local archive. From a checkout, run `python3 install.py --with-plugin` directly; both paths produce the same installation.
+`OMARCHY_USAGE_REF=v1.2.0` pins a release, and `OMARCHY_USAGE_TARBALL=/path/file.tar.gz` installs a local archive. From a checkout, run `python3 install.py --with-plugin` directly; both paths produce the same installation.
 
 The installer runs without sudo. It checks all tracked destinations before changing files, records rollback information, and writes replacements atomically. It does not modify `/usr/share/omarchy`.
 

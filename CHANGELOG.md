@@ -1,12 +1,14 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 - 2026-09-17
 
-- Ollama Cloud usage history and limits, using a key from Settings, `OLLAMA_API_KEY`, or `~/.config/omarchy/ai-usage/ollama.key`. The key is never written back and never appears in a rendered report.
-- Ollama Cloud model rates, including the published peak-pricing window for the DeepSeek models.
-- Count the agent's own OpenCode Go and Ollama Cloud spending, so running those routes through Hermes no longer hides that usage from the dashboard. The two ledgers share no session ids, so nothing is counted twice.
+- Ollama Cloud usage: local token history alongside the plan's usage limits, read from an API key you supply. Add it under **Settings**, or export `OLLAMA_API_KEY`, or drop a key in `~/.config/omarchy/ai-usage/ollama.key`. The key is never written back, never leaves the request it authenticates, and never appears in anything the dashboard renders.
+- Ollama Cloud model rates, including the published peak window that doubles the DeepSeek rates on weekday afternoons.
+- Count the agent's own OpenCode Go and Ollama Cloud spending. Running those routes through Hermes used to hide that usage; both are now included, and they reconcile to the agent's own ledger exactly.
 - Split agent-sourced usage by what it was for: typed prompts, title generation, context compression, vision, approvals, and background review.
 - Treat a Hermes home as a source folder, so it can be labelled per account or imported from another machine.
+- Show up to four model rows on each overview card, from local token totals. Providers whose usage endpoint reports one aggregate number cannot supply per-model shares, so the local figures are the honest view there.
+- Fixes to the above before release: reasoning was counted twice for agent rows (it is a subset of output there, not a separate counter), and an agent row's accumulated total could move to a later day on each scan and rewrite the daily history. Existing installs correct themselves on the next scan.
 
 ## 1.1.1 - 2026-09-15
 
