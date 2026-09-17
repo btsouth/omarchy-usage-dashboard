@@ -55,6 +55,9 @@ Scope {
     property string draftLocalLabel: "Local"
     property string draftLedgerSyncDir: ""
     property string draftLedgerDeviceId: ""
+    // The stored key never reaches this window; the report sends a mask, so
+    // an untouched field means "keep what is stored" rather than an edit.
+    property string draftOllamaKey: ""
     property string saveError: ""
     property var homeOptions: [
         {key:"codexHomes",name:"Codex homes",example:"/mnt/other-computer/.codex"},
@@ -64,7 +67,8 @@ Scope {
         {key:"opencodeHomes",name:"OpenCode data folders",example:"/mnt/other-computer/.local/share/opencode"},
         {key:"piHomes",name:"Pi agent folders",example:"/mnt/other-computer/.pi/agent"},
         {key:"ompHomes",name:"Oh My Pi agent folders",example:"/mnt/other-computer/.omp/agent"},
-        {key:"museHomes",name:"Muse homes",example:"/mnt/other-computer/.local/share/muse"}]
+        {key:"museHomes",name:"Muse homes",example:"/mnt/other-computer/.local/share/muse"},
+        {key:"hermesHomes",name:"Hermes homes",example:"/mnt/other-computer/.hermes"}]
     function providerName(id) { var p = providerOptions.find(p => p.id === id); return p ? p.name : id }
     function accountSources(account) {
         var names = []
@@ -80,7 +84,7 @@ Scope {
             "opencode-go": palette.bright_yellow || "#e5c736", grok: palette.bright_blue || "#9cb8db",
             gemini: palette.bright_magenta || "#c6a0d5", opencode: palette.bright_green || "#a7c080",
             pi: palette.bright_white || palette.bright_foreground || "#d4d4d4", omp: palette.red || "#d88b68",
-            muse: palette.blue || "#7aa2f7"})[id] || root.ink
+            muse: palette.blue || "#7aa2f7", "ollama-cloud": palette.orange || "#a2734b"})[id] || root.ink
         var color=Qt.darker(raw,1), background=luminance(root.base)
         for (var i=0;i<16;i++) {
             var value=luminance(color)
@@ -137,6 +141,7 @@ Scope {
         draftLocalLabel = s.localAccountLabel || "Local"
         draftLedgerSyncDir = s.ledgerSyncDir || ""
         draftLedgerDeviceId = s.ledgerDeviceId || ""
+        draftOllamaKey = s.ollamaApiKey || ""
         var prices = {}, homes = {}
         providerOptions.forEach(p => prices[p.id] = s.monthlyPrices && s.monthlyPrices[p.id] !== undefined ? String(s.monthlyPrices[p.id]) : "")
         draftAccounts.forEach(a => prices[a.id] = s.monthlyPrices && s.monthlyPrices[a.id] !== undefined ? String(s.monthlyPrices[a.id]) : "")
@@ -157,7 +162,7 @@ Scope {
         }
         saveError = ""
         var s = {accounts: draftAccounts, localAccountLabel: draftLocalLabel, enabled: draftEnabled, monthlyPrices: prices, windowOpacity: opacitySlider.value,
-                 ledgerSyncDir: draftLedgerSyncDir, ledgerDeviceId: draftLedgerDeviceId}
+                 ledgerSyncDir: draftLedgerSyncDir, ledgerDeviceId: draftLedgerDeviceId, ollamaApiKey: draftOllamaKey}
         homeOptions.forEach(h => s[h.key] = (draftHomes[h.key] || "").split("\n").filter(x => x.trim()).map(x => x.trim()))
         save.command = ["python3", helper, "settings", "--save", JSON.stringify(s)]
         save.running = true
@@ -592,6 +597,21 @@ Scope {
                                         }
                                     }
                                     Column {
+                                        visible: !!modelData.models && modelData.models.length > 0
+                                        width: providerColumn.width; spacing: 5
+                                        Sub { text: "Models · this period" }
+                                        Repeater {
+                                            model: modelData.models || []
+                                            RowLayout {
+                                                required property var modelData
+                                                width: providerColumn.width; spacing: 8
+                                                Sub { text: modelData.model; Layout.fillWidth: true; elide: Text.ElideRight }
+                                                Label { text: root.compact(modelData.tokens); font.pixelSize: 10 }
+                                                Label { text: modelData.unpriced >= modelData.tokens ? "unpriced" : root.money(modelData.value); font.pixelSize: 10; color: root.muted }
+                                            }
+                                        }
+                                    }
+                                    Column {
                                         visible: modelData.provider === "opencode-go" && !!root.data && root.data.goAllowance.models.length > 0
                                         width: providerColumn.width; spacing: 5
                                         Sub { text: "Model allowance · this month" }
@@ -794,7 +814,7 @@ Scope {
                 Column {
                     width: settingsScroll.availableWidth; spacing: 18
                     Label { text: "Make it yours"; font.pixelSize: 24; font.weight: Font.DemiBold }
-                    Sub { text: "Analytics preferences stay on this machine. Credentials remain in their existing apps." }
+                    Sub { text: "Analytics preferences stay on this machine. Existing app credentials are read, never changed." }
                     Label { text: "Visible providers"; font.pixelSize: 16 }
                     Flow { width: parent.width; spacing: 10
                         Repeater { model: root.providerOptions
@@ -852,7 +872,10 @@ Scope {
                         }
                     }
                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Prices on a provider apply to the local history group; prices on a labelled account apply only to that account." }
-                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Grok quota uses its existing login. If it expires, run grok login. The dashboard never changes credentials." }
+                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Quota sources: Grok and Muse read their existing logins; Ollama Cloud reads a key here, from OLLAMA_API_KEY, or from ~/.config/omarchy/ai-usage/ollama.key. The dashboard never changes credentials and sends a key only to the provider it belongs to." }
+                    Label { text: "Ollama Cloud API key"; font.pixelSize: 16 }
+                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Optional. Only needed to show Ollama Cloud usage limits; local token history works without it. Leave blank to use the environment or the key file." }
+                    Field { width: 420; text: root.draftOllamaKey; placeholderText: "Not set"; echoMode: TextInput.Password; onTextEdited: root.draftOllamaKey = text; Accessible.name: "Ollama Cloud API key" }
                     Label { text: "History accounts"; font.pixelSize: 16 }
                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Label agent home folders by account. Keep mirrored folders under the same account. Labels do not switch logins; quota is only for the current login on this PC." }
                     Field { width: 260; text: root.draftLocalLabel; placeholderText: "Local account name"; onTextEdited: root.draftLocalLabel = text; Accessible.name: "Local account name" }
@@ -886,7 +909,7 @@ Scope {
                     Choice { text: "Add account"; onClicked: { root.draftAccounts=root.draftAccounts.concat([{id:"account-"+Date.now()+"-"+Math.random().toString(36).slice(2,8),label:"",directories:[{provider:"codex",path:""}]}]) } }
                     Label { text: "Unlabelled additional history folders"; font.pixelSize: 16 }
                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: "One full home-folder path per line, such as /mnt/other-computer/.codex. Use folders you have already mounted or synced. No remote connection is made. Copies with stable session IDs are deduplicated." }
-                    Repeater { model: root.homeOptions.filter(h => root.draftEnabled.indexOf(h.key.replace(/Homes$/, ""))>=0 || (h.key === "opencodeHomes" && root.draftEnabled.indexOf("opencode-go")>=0))
+                    Repeater { model: root.homeOptions.filter(h => root.draftEnabled.indexOf(h.key.replace(/Homes$/, ""))>=0 || (h.key === "opencodeHomes" && root.draftEnabled.indexOf("opencode-go")>=0) || (h.key === "hermesHomes" && (root.draftEnabled.indexOf("opencode-go")>=0 || root.draftEnabled.indexOf("ollama-cloud")>=0)))
                         Column {
                             required property var modelData
                             width: parent.width; spacing: 6

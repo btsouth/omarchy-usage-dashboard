@@ -16,6 +16,15 @@ class CollectorTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        # Every path the collector writes must resolve inside the fixture. A
+        # test that reaches the real home would overwrite the user's settings.
+        self.conf = patch.object(c, 'CONFIG', self.root / 'config/omarchy/ai-usage/settings.json')
+        self.conf.start(); self.addCleanup(self.conf.stop)
+        self.state = patch.object(c, 'STATE', self.root / 'state')
+        self.state.start(); self.addCleanup(self.state.stop)
+        # Fail loudly rather than overwrite a real preference file.
+        self.assertTrue(str(c.CONFIG).startswith(str(self.root)))
+        self.assertTrue(str(c.STATE).startswith(str(self.root)))
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -734,6 +743,219 @@ class CollectorTests(unittest.TestCase):
         self.assertNotIn('T3', rates['source'])
         record=c.record('x','codex','s',1,'gpt-4.1','','CLI',input=100,output=10)
         self.assertIsNotNone(c.price(record,rates['document'])[0])
+
+    def hermes_ledger(self, rows, name='hermes/state.db', sessions=None):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(path)
+        db.execute('''CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT)''')
+        db.execute('''CREATE TABLE session_model_usage (
+            session_id TEXT, model TEXT, billing_provider TEXT, billing_base_url TEXT, billing_mode TEXT,
+            task TEXT, api_call_count INTEGER, input_tokens INTEGER, output_tokens INTEGER,
+            cache_read_tokens INTEGER, cache_write_tokens INTEGER, reasoning_tokens INTEGER,
+            estimated_cost_usd REAL, actual_cost_usd REAL, cost_status TEXT, cost_source TEXT,
+            first_seen REAL, last_seen REAL)''')
+        for sid, cwd in (sessions or []): db.execute('INSERT INTO sessions VALUES (?,?)', (sid, cwd))
+        for row in rows:
+            values = {'session_id': 's1', 'model': 'deepseek-v4.1-flash', 'billing_provider': 'opencode-go',
+                      'billing_base_url': 'https://opencode.ai/zen/go/v1', 'billing_mode': '', 'task': '',
+                      'api_call_count': 4, 'input_tokens': 1000, 'output_tokens': 200,
+                      'cache_read_tokens': 5000, 'cache_write_tokens': 0, 'reasoning_tokens': 300,
+                      'estimated_cost_usd': 0.0, 'actual_cost_usd': 0.0, 'cost_status': None, 'cost_source': None,
+                      'first_seen': 1789000000.0, 'last_seen': 1789000100.0}
+            values.update(row)
+            db.execute('INSERT INTO session_model_usage VALUES (%s)' % ','.join('?' * len(values)), list(values.values()))
+        db.commit(); db.close()
+        return path
+
+    def test_hermes_rows_map_to_their_route_totals(self):
+        path = self.hermes_ledger([
+            {'session_id': 's1', 'model': 'deepseek-v4.1-flash'},
+            {'session_id': 's2', 'model': 'glm-5.2', 'billing_provider': 'ollama-cloud',
+             'billing_base_url': 'https://ollama.com/v1', 'task': 'background_review',
+             'input_tokens': 10, 'output_tokens': 2, 'cache_read_tokens': 0, 'reasoning_tokens': 0,
+             'last_seen': 1789000300.0}], sessions=[('s1', '/home/user/Projects/toolport'), ('s2', '/home/user')])
+        records = list(c.hermes_records(path))
+        self.assertEqual(len(records), 2)
+        go = records[0]['row']
+        self.assertEqual((go['provider'], go['session'], go['model'], go['project'], go['client']),
+                         ('opencode-go', 's1', 'deepseek-v4.1-flash', '/home/user/Projects/toolport', 'Hermes'))
+        # Hermes counts reasoning separately from output, like OpenCode.
+        self.assertEqual((go['input'], go['output'], go['reasoning'], go['cacheRead']), (1000, 500, 300, 5000))
+        self.assertEqual(go['ts'], 1789000100)
+        self.assertEqual(go['modelCalls'], 4)
+        self.assertEqual(records[1]['row']['provider'], 'ollama-cloud')
+        self.assertEqual(records[1]['task'], 'background review')
+
+    def test_hermes_accumulating_row_updates_instead_of_double_counting(self):
+        path = self.hermes_ledger([{'input_tokens': 1000, 'output_tokens': 200}])
+        ledger = c.Ledger(self.root / 'hermes.sqlite')
+        for item in c.hermes_records(path): ledger.put(item['row'], path, growing=True)
+        # The agent accumulates in place, so the same key now carries more.
+        db = sqlite3.connect(path)
+        db.execute('UPDATE session_model_usage SET input_tokens=4000, output_tokens=500, api_call_count=9, last_seen=1789000900.0')
+        db.commit(); db.close()
+        for item in c.hermes_records(path): ledger.put(item['row'], path, growing=True)
+        self.assertEqual(ledger.db.execute('SELECT COUNT(*),SUM(input),SUM(output),MAX(ts),MAX(modelCalls) FROM events').fetchone(),
+                         (1, 4000, 800, 1789000900, 9))
+        ledger.db.close()
+
+    def test_hermes_and_opencode_go_both_count_without_overlap(self):
+        # No OpenCode transcript exists for the Hermes session, and no Hermes
+        # row exists for the OpenCode session, so the two add up.
+        path = self.hermes_ledger([{'session_id': '20260916_221601_30d7b7', 'input_tokens': 100,
+                                    'output_tokens': 10, 'reasoning_tokens': 0, 'cache_read_tokens': 0}],
+                                  sessions=[('20260916_221601_30d7b7', '/home/user')])
+        ledger = c.Ledger(self.root / 'both.sqlite')
+        ledger.put({**c.record('opencode-session-event', 'opencode-go', 'ses_abc', 1789000000, 'deepseek-v4.1-flash',
+                               '/home/user', 'OpenCode', input=700, output=70), 'apiProvider': 'opencode-go'})
+        for item in c.hermes_records(path): ledger.put(item['row'], path)
+        self.assertEqual(ledger.db.execute("SELECT COUNT(*),SUM(input),SUM(output) FROM events WHERE provider='opencode-go'").fetchone(),
+                         (2, 800, 80))
+        ledger.db.close()
+
+    def test_hermes_source_without_the_usage_table_degrades(self):
+        path = self.root / '.hermes/state.db'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(path)
+        db.execute('CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT)')
+        db.commit(); db.close()
+        ledger = c.Ledger(self.root / 'degrade.sqlite')
+        with patch.object(c, 'HOME', self.root), patch.dict('os.environ', {
+                'CODEX_HOME': str(self.root / 'codex'), 'CLAUDE_CONFIG_DIR': str(self.root / 'claude'),
+                'GROK_HOME': str(self.root / 'grok'), 'PI_CODING_AGENT_DIR': str(self.root / 'pi'),
+                'XDG_DATA_HOME': str(self.root / 'data')}):
+            meta = ledger.scan(c.DEFAULTS)
+        hermes = next(s for s in meta['sources'] if s['provider'] == 'hermes')
+        self.assertEqual((hermes['status'], hermes['readErrors']), ('partial', 1))
+        ledger.db.close()
+
+    def test_hermes_source_is_scanned_and_reported_once(self):
+        self.hermes_ledger([{'session_id': 's1', 'input_tokens': 500, 'output_tokens': 50}],
+                           name='.hermes/state.db', sessions=[('s1', '/home/user')])
+        ledger = c.Ledger(self.root / 'scan.sqlite')
+        with patch.object(c, 'HOME', self.root), patch.dict('os.environ', {
+                'CODEX_HOME': str(self.root / 'codex'), 'CLAUDE_CONFIG_DIR': str(self.root / 'claude'),
+                'GROK_HOME': str(self.root / 'grok'), 'PI_CODING_AGENT_DIR': str(self.root / 'pi'),
+                'XDG_DATA_HOME': str(self.root / 'data')}):
+            meta = ledger.scan(c.DEFAULTS)
+            meta = ledger.scan(c.DEFAULTS)
+        self.assertEqual(meta['sources'][[s['provider'] for s in meta['sources']].index('hermes')]['status'], 'available')
+        self.assertEqual(ledger.db.execute("SELECT COUNT(*),SUM(input) FROM events WHERE provider='opencode-go'").fetchone(), (1, 500))
+        ledger.db.close()
+
+    def ollama_urlopen(self, payload):
+        import io
+        def fake(request, timeout=12):
+            assert request.full_url == 'https://ollama.com/api/usage', request.full_url
+            assert request.get_header('Authorization') == 'Bearer test-ollama-key', request.get_header('Authorization')
+            return io.BytesIO(json.dumps(payload).encode())
+        return fake
+
+    def test_ollama_quota_maps_whatever_windows_the_plan_reports(self):
+        payload = {'limits': {'session': {'usage': 0.046, 'models': [{'name': 'glm-5.2', 'request_count': 34}]},
+                              'weekly': {'usage': 0.051, 'models': [{'name': 'glm-5.2', 'request_count': 254}]}}}
+        with patch.dict('os.environ', {'OLLAMA_API_KEY': 'test-ollama-key', 'XDG_CONFIG_HOME': str(self.root / 'config')}), \
+             patch.object(c.urllib.request, 'urlopen', side_effect=self.ollama_urlopen(payload)):
+            quota = c.ollama_quota(True)
+            self.assertEqual(c.quota('ollama-cloud')['limits'][0]['label'], 'Session (5-hour)')
+        self.assertEqual(quota['error'], '')
+        by_label = {w['label']: w for w in quota['limits']}
+        self.assertAlmostEqual(by_label['Session (5-hour)']['percent'], .046)
+        self.assertAlmostEqual(by_label['Weekly (7-day)']['percent'], .051)
+        # The endpoint carries no reset time, so no window invents one.
+        self.assertNotIn('resetsAt', by_label['Weekly (7-day)'])
+
+    def test_ollama_quota_accepts_a_monthly_credit_plan(self):
+        payload = {'limits': {'monthly': {'usage': 0.0, 'models': [{'name': 'deepseek-v4.1-flash', 'request_count': 18}]}}}
+        with patch.dict('os.environ', {'OLLAMA_API_KEY': 'test-ollama-key', 'XDG_CONFIG_HOME': str(self.root / 'config')}), \
+             patch.object(c.urllib.request, 'urlopen', side_effect=self.ollama_urlopen(payload)):
+            quota = c.ollama_quota(True)
+        self.assertEqual(quota['error'], '')
+        self.assertEqual([w['label'] for w in quota['limits']], ['Monthly'])
+        self.assertAlmostEqual(quota['limits'][0]['percent'], 0.0)
+        # The endpoint's per-model request counts are not a share of the plan,
+        # so nothing is fabricated into the window; per-model detail comes from
+        # the local ledger instead.
+        self.assertNotIn('note', quota['limits'][0])
+
+    def test_cards_carry_per_model_rows_from_the_local_ledger(self):
+        ledger = c.Ledger(self.root / 'models.sqlite')
+        ledger.put(c.record('a', 'ollama-cloud', 's', 1789000000, 'glm-5.2', '/p', 'Hermes',
+                            input=1000, output=100))
+        ledger.put(c.record('b', 'ollama-cloud', 's', 1789000000, 'kimi-k3', '/p', 'Hermes',
+                            input=10, output=1))
+        with patch.object(c, 'quota', return_value={'limits': []}), patch.object(c, 'account_quotas', return_value=({}, {})), \
+             patch.object(c, 'theme', return_value={}):
+            data = c.report(ledger, c.DEFAULTS | {'enabled': ['ollama-cloud']}, days=365,
+                            now=dt.datetime(2026, 9, 16, 12).astimezone())
+        card = next(x for x in data['cards'] if x['provider'] == 'ollama-cloud')
+        self.assertEqual([m['model'] for m in card['models']], ['glm-5.2', 'kimi-k3'])
+        self.assertEqual(card['models'][0]['tokens'], 1100)
+        self.assertGreater(card['models'][0]['value'], 0)
+        ledger.db.close()
+
+    def test_ollama_key_precedence_and_no_key_message(self):
+        config = self.root / 'config/omarchy/ai-usage'
+        config.mkdir(parents=True, exist_ok=True)
+        with patch.dict('os.environ', {'XDG_CONFIG_HOME': str(self.root / 'config')}), patch.object(c.urllib.request, 'urlopen') as request:
+            c.atomic_json(c.CONFIG, c.DEFAULTS)
+            quota = c.ollama_quota(True)
+            self.assertIn('Settings', quota['error'])
+            request.assert_not_called()
+            (config / 'ollama.key').write_text('file-key\n')
+            self.assertEqual(c.ollama_key(), 'file-key')
+            with patch.dict('os.environ', {'OLLAMA_API_KEY': 'env-key'}): self.assertEqual(c.ollama_key(), 'env-key')
+            self.assertEqual(c.ollama_key(c.DEFAULTS | {'ollamaApiKey': 'typed-key'}), 'typed-key')
+
+    def test_ollama_quota_errors_do_not_expose_the_key(self):
+        import io
+        def failing(request, timeout=12):
+            raise c.urllib.error.HTTPError(request.full_url, 401, 'Unauthorized', {}, io.BytesIO(b'bad test-ollama-key'))
+        with patch.dict('os.environ', {'OLLAMA_API_KEY': 'test-ollama-key', 'XDG_CONFIG_HOME': str(self.root / 'config')}), \
+             patch.object(c.urllib.request, 'urlopen', side_effect=failing):
+            quota = c.ollama_quota(True)
+        self.assertNotIn('test-ollama-key', json.dumps(quota))
+        self.assertNotIn('test-ollama-key', (c.STATE / 'ollama-quota.json').read_text())
+
+    def test_ollama_rates_price_cloud_models_and_double_at_peak(self):
+        rates = c.load_rates()
+        # Off-peak Tuesday 09:00 UTC.
+        off = c.record('off', 'ollama-cloud', 's', dt.datetime(2026, 9, 15, 9, tzinfo=dt.timezone.utc).timestamp(),
+                       'deepseek-v4.1-flash', '', 'Hermes', input=1_000_000, output=1_000_000, cacheRead=1_000_000)
+        # Peak Tuesday 13:00 UTC.
+        peak = c.record('peak', 'ollama-cloud', 's', dt.datetime(2026, 9, 15, 13, tzinfo=dt.timezone.utc).timestamp(),
+                        'deepseek-v4.1-flash', '', 'Hermes', input=1_000_000, output=1_000_000, cacheRead=1_000_000)
+        self.assertAlmostEqual(c.price(off, rates['document'])[0], 0.15 + 0.60 + 0.003, places=6)
+        self.assertAlmostEqual(c.price(peak, rates['document'])[0], 0.30 + 1.20 + 0.006, places=6)
+        # A model the pricing table lists without a cached-input rate stays
+        # unpriced rather than assuming free caching.
+        partial = c.record('partial', 'ollama-cloud', 's', off['ts'], 'qwen3.5:397b', '', 'Hermes',
+                           input=100, output=10, cacheRead=50)
+        self.assertIsNone(c.price(partial, rates['document'])[0])
+        self.assertIn('Ollama Cloud model rates', rates['source'])
+
+    def test_ollama_rates_never_price_another_route(self):
+        rates = c.load_rates()
+        # The same model name on the OpenCode Go route must not pick up the
+        # cloud table, and vice versa.
+        go = c.record('go', 'opencode-go', 's', 1789000000, 'glm-5.3-flash', '', 'OpenCode',
+                      input=1_000_000, output=1_000_000)
+        self.assertAlmostEqual(c.price(go, rates['document'])[0], 0.15 + 0.50, places=6)
+        self.assertIsNone(rates['document'].get('glm-5.3-flash'))
+
+    def test_settings_keep_a_stored_ollama_key_and_report_only_masks_it(self):
+        with patch.dict('os.environ', {'XDG_CONFIG_HOME': str(self.root / 'config')}):
+            saved = c.save_settings(c.DEFAULTS | {'enabled': ['ollama-cloud'], 'ollamaApiKey': 'typed-key'})
+            self.assertEqual(saved['ollamaApiKey'], 'typed-key')
+            # The report round trip carries the mask; saving it back keeps the key.
+            again = c.save_settings(c.DEFAULTS | saved | {'ollamaApiKey': c.OLLAMA_KEY_MASK})
+            self.assertEqual(again['ollamaApiKey'], 'typed-key')
+            ledger = c.Ledger(self.root / 'mask.sqlite')
+            with patch.object(c, 'quota', return_value={'limits': []}), patch.object(c, 'account_quotas', return_value=({}, {})), patch.object(c, 'theme', return_value={}):
+                data = c.report(ledger, c.settings() | {'enabled': ['ollama-cloud']}, days=7)
+            self.assertEqual(data['settings']['ollamaApiKey'], c.OLLAMA_KEY_MASK)
+            ledger.db.close()
 
 
 if __name__ == '__main__': unittest.main()

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Ollama Cloud usage history and limits, using a key from Settings, `OLLAMA_API_KEY`, or `~/.config/omarchy/ai-usage/ollama.key`. The key is never written back and never appears in a rendered report.
+- Ollama Cloud model rates, including the published peak-pricing window for the DeepSeek models.
+- Count the agent's own OpenCode Go and Ollama Cloud spending, so running those routes through Hermes no longer hides that usage from the dashboard. The two ledgers share no session ids, so nothing is counted twice.
+- Split agent-sourced usage by what it was for: typed prompts, title generation, context compression, vision, approvals, and background review.
+- Treat a Hermes home as a source folder, so it can be labelled per account or imported from another machine.
+
 ## 1.1.1 - 2026-09-15
 
 - Follow Omarchy theme swaps live again: the dashboard watches the stable theme directory, which survives the swap that replaces it by rename.

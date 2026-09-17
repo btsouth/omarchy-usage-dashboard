@@ -18,6 +18,29 @@ Panel {
   readonly property color track: Style.selectedFillFor(foreground, Color.accent)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
+  // A scrollbar that leaves no groove behind. The default control reserves a
+  // track beside the content and paints it over the text it scrolls; this one
+  // keeps only a short thumb. The width/height bindings matter: ScrollBar
+  // stretches its contentItem to the full track otherwise, which reads as a
+  // permanent bright line down the panel.
+  component QuietScrollBar: ScrollBar {
+    id: quiet
+    policy: ScrollBar.AsNeeded
+    padding: 0
+    implicitWidth: Style.space(6)
+    background: Item {}
+    contentItem: Rectangle {
+      implicitWidth: Style.space(4)
+      implicitHeight: Style.space(28)
+      width: implicitWidth
+      height: Math.max(implicitHeight, quiet.size * quiet.availableHeight)
+      radius: width / 2
+      color: quiet.pressed ? Color.accent : Qt.alpha(root.foreground, quiet.hovered ? 0.45 : 0.25)
+      opacity: quiet.active || quiet.hovered ? 1 : 0.5
+      Behavior on opacity { NumberAnimation { duration: 150 } }
+    }
+  }
+
   readonly property var providers: usage.enabledProviders
   // The selection follows the provider, not the slot it happens to sit in: a
   // provider whose first scan lands while the panel is open would otherwise
@@ -360,7 +383,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(380))
+    contentWidth: panel.fittedContentWidth(Style.space(420))
     // Taller than the control panels on purpose: this one is a dashboard, and
     // the whole point is reading limits and history without scrolling.
     contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(640))
@@ -386,13 +409,16 @@ Panel {
       Flickable {
         id: panelFlick
         anchors.fill: parent
+        // Reserve the scrollbar's own column so its thumb never overlaps the
+        // text. The extra inset on the right keeps the numbers off the edge.
+        anchors.rightMargin: Style.space(14)
         contentWidth: width
         contentHeight: column.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
         interactive: contentHeight > height
-        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+        ScrollBar.vertical: QuietScrollBar { parent: panelFlick; x: panelFlick.width + Style.space(4); height: panelFlick.height }
 
         Column {
           id: column

@@ -25,17 +25,33 @@ HOME = Path.home()
 STATE = Path(os.getenv('XDG_STATE_HOME', HOME / '.local/state')) / 'omarchy/ai-usage'
 CONFIG = Path(os.getenv('XDG_CONFIG_HOME', HOME / '.config')) / 'omarchy/ai-usage/settings.json'
 PROVIDERS = {'codex': 'Codex', 'claude': 'Claude', 'opencode-go': 'OpenCode Go', 'grok': 'Grok Build',
-             'gemini': 'Gemini CLI', 'opencode': 'OpenCode', 'pi': 'Pi', 'omp': 'Oh My Pi', 'muse': 'Muse'}
-HOME_KEYS = ('codexHomes', 'claudeHomes', 'grokHomes', 'geminiHomes', 'opencodeHomes', 'piHomes', 'ompHomes', 'museHomes')
+             'gemini': 'Gemini CLI', 'opencode': 'OpenCode', 'pi': 'Pi', 'omp': 'Oh My Pi', 'muse': 'Muse',
+             'ollama-cloud': 'Ollama Cloud'}
+HOME_KEYS = ('codexHomes', 'claudeHomes', 'grokHomes', 'geminiHomes', 'opencodeHomes', 'piHomes', 'ompHomes',
+             'museHomes', 'hermesHomes')
+# Provider ids used by the Hermes agent's own per-model usage table. Hermes
+# bills the same routes this dashboard reads elsewhere, so its ledger is a
+# source, not a separate provider.
+HERMES_ROUTES = ('opencode-go', 'ollama-cloud')
+HERMES_TASKS = {'': 'conversation', 'title_generation': 'title generation', 'background_review': 'background review',
+                'approval': 'approval', 'compression': 'context compression', 'vision': 'vision',
+                'embedding': 'embedding'}
+# Ollama Cloud reports quota as a fraction of each plan window. Legacy plans
+# have session and weekly windows; credit plans have a monthly one.
+OLLAMA_WINDOWS = {'session': 'Session (5-hour)', 'weekly': 'Weekly (7-day)', 'monthly': 'Monthly'}
+# Stands in for a stored key in reports so the settings form can show that one
+# exists without sending it back over the report channel. Never a valid key.
+OLLAMA_KEY_MASK = 'stored'
 DEFAULTS = {'enabled': ['codex', 'claude', 'opencode-go'], 'monthlyPrices': {},
             **{key: [] for key in HOME_KEYS}, 'accounts': [], 'localAccountLabel': 'Local', 'windowOpacity': 0.985,
-            'ledgerSyncDir': '', 'ledgerDeviceId': ''}
+            'ledgerSyncDir': '', 'ledgerDeviceId': '', 'ollamaApiKey': ''}
 FIELDS = ('input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h', 'reasoning')
 # Bundled official rate tables merged over the catalog, in order. User
 # rates.json entries still win over every file listed here.
 OVERRIDES = (('pricing.json', 'OpenCode Go official rates'),
              ('muse-pricing.json', 'Muse official rates'),
-             ('codex-pricing.json', 'Codex model rates'))
+             ('codex-pricing.json', 'Codex model rates'),
+             ('ollama-pricing.json', 'Ollama Cloud model rates'))
 
 
 def atomic_json(path, value):
@@ -75,7 +91,16 @@ def save_settings(value):
              'monthlyPrices': {}, **{key: [] for key in HOME_KEYS},
              'accounts': [], 'localAccountLabel': str(value.get('localAccountLabel') or 'Local').strip(),
              'ledgerSyncDir': '', 'ledgerDeviceId': str(value.get('ledgerDeviceId') or '').strip(),
+             'ollamaApiKey': str(value.get('ollamaApiKey') or '').strip(),
              'windowOpacity': max(0.55, min(1.0, float(value.get('windowOpacity', 0.985))))}
+    # The user's own key beats the environment and the key file, since typing
+    # one in is deliberate. Settings stay nonsecret by default; this value is
+    # the exception and is never echoed back by a report.
+    if clean['ollamaApiKey'] == OLLAMA_KEY_MASK:
+        # A report round trip carries the mask, not the key, so an unchanged
+        # field means "keep whatever is stored" rather than a literal edit.
+        clean['ollamaApiKey'] = str(settings().get('ollamaApiKey') or '')
+    if len(clean['ollamaApiKey']) > 200: raise ValueError('Give the Ollama Cloud API key 200 characters or fewer.')
     if str(value.get('ledgerSyncDir') or '').strip():
         clean['ledgerSyncDir'] = str(Path(str(value['ledgerSyncDir'])).expanduser().absolute())
     if len(clean['ledgerDeviceId']) > 80: raise ValueError('Give the ledger device id 80 characters or fewer.')
@@ -365,6 +390,51 @@ def opencode_record(mid, sid, ts, project, model, route, usage, cost):
     return r
 
 
+def hermes_ledger_path(root):
+    return Path(root).expanduser() / 'state.db'
+
+
+def hermes_records(path):
+    """Per-route token totals from the Hermes agent's own usage table.
+
+    Hermes bills OpenCode Go and Ollama Cloud through the same accounts this
+    dashboard reads from the CLI apps, and writes nothing to those apps'
+    histories, so its ledger is the only local record of that traffic. Rows
+    are per session, model, route, and task; the table accumulates in place,
+    so a row's id is namespaced by those keys and the ledger keeps the
+    largest totals rather than adding a rescan.
+    """
+    conn = sqlite3.connect(Path(path).resolve().as_uri() + '?mode=ro', uri=True, timeout=3)
+    try:
+        conn.row_factory = sqlite3.Row
+        columns = {row[1] for row in conn.execute('PRAGMA table_info(session_model_usage)')}
+        if not {'session_id', 'model', 'billing_provider', 'first_seen', 'last_seen', 'input_tokens'} <= columns:
+            raise ValueError('Not a Hermes usage ledger')
+        try: projects = {r[0]: r[1] for r in conn.execute('SELECT id, cwd FROM sessions')}
+        except sqlite3.Error: projects = {}
+        wanted = ','.join('?' for _ in HERMES_ROUTES)
+        for row in conn.execute(f'SELECT * FROM session_model_usage WHERE billing_provider IN ({wanted})', HERMES_ROUTES):
+            r = dict(row)
+            provider = r['billing_provider']
+            session, model = str(r['session_id']), r['model'] or 'unknown'
+            task = str(r.get('task') or '')
+            ts = timestamp(r.get('last_seen') or r.get('first_seen'))
+            # Hermes counts output_tokens separately from reasoning, like
+            # OpenCode, so reasoning joins output under the dashboard's totals.
+            entry = record(digest('hermes', provider, session, model, task), provider, session, ts, model,
+                           projects.get(r['session_id']) or '', 'Hermes',
+                           input=r.get('input_tokens'), output=r.get('output_tokens'),
+                           reasoning=r.get('reasoning_tokens'), cacheRead=r.get('cache_read_tokens'),
+                           cacheWrite=r.get('cache_write_tokens'))
+            entry['output'] += entry['reasoning']
+            entry['apiProvider'] = provider
+            entry['modelCalls'] = number(r.get('api_call_count'))
+            entry['reportedValue'] = reported_value(r.get('estimated_cost_usd'))
+            yield {'row': entry, 'task': HERMES_TASKS.get(task, task or 'conversation')}
+    finally:
+        conn.close()
+
+
 class Ledger:
     def __init__(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -392,11 +462,14 @@ class Ledger:
         for name, kind in [('reportedValue', 'REAL'), ('apiProvider', 'TEXT')]:
             if name not in columns: self.db.execute(f'ALTER TABLE events ADD COLUMN {name} {kind}')
 
-    def put(self, r, source=None):
+    def put(self, r, source=None, growing=False):
         if not r['ts'] or not sum(r[f] for f in FIELDS[:4]): return
         keys = list(r)
         # Claude streams may repeat a message with a larger final usage count.
         update = ','.join(f'{f}=MAX(events.{f},excluded.{f})' for f in FIELDS)
+        # A source whose row accumulates in place also moves forward in time;
+        # every other source keeps the timestamp it first recorded.
+        if growing: update += ',ts=MAX(events.ts,excluded.ts)'
         update += ',reportedCostTicks=COALESCE(MAX(COALESCE(events.reportedCostTicks,0),excluded.reportedCostTicks),events.reportedCostTicks)'
         update += ',modelCalls=MAX(COALESCE(events.modelCalls,0),COALESCE(excluded.modelCalls,0))'
         update += ',reportedValue=COALESCE(MAX(COALESCE(events.reportedValue,0),excluded.reportedValue),events.reportedValue)'
@@ -543,6 +616,25 @@ class Ledger:
                                 item.get('modelID'), item.get('providerID'), item.get('tokens') or {}, item.get('cost')), path.resolve())
                     except (OSError, ValueError, TypeError, AttributeError):
                         source['readErrors'] = source.get('readErrors', 0) + 1
+        hermes_roots = [str(HOME / '.hermes')] + cfg.get('hermesHomes', [])
+        for root in sorted(set(hermes_roots)):
+            path = hermes_ledger_path(root)
+            source = {'provider': 'hermes', 'path': str(path), 'files': int(path.exists()),
+                      'exists': path.exists(), 'kind': 'database', 'clients': list(HERMES_ROUTES)}
+            sources.append(source)
+            if not path.exists(): continue
+            try:
+                for item in hermes_records(path):
+                    # The task dimension the CLI apps do not record, kept in the
+                    # client field so the breakdowns distinguish typed prompts
+                    # from background work the agent did on its own.
+                    entry = item['row']
+                    if item['task'] != 'conversation':
+                        entry['client'] = 'Hermes · ' + item['task']
+                    self.put(entry, path.resolve(), growing=True)
+            except (sqlite3.Error, ValueError, TypeError, AttributeError, KeyError):
+                source['readErrors'] = 1
+                warnings.append('Hermes database could not be read; retained previous records.')
         for source in sources:
             source['status'] = 'missing' if not source['exists'] else 'partial' if source.get('readErrors') else 'available'
         warnings.extend(self.sync_ledgers(cfg))
@@ -695,11 +787,12 @@ def account_quotas():
 def quota(provider):
     if provider in ('opencode', 'pi', 'omp'):
         return {'limits': [], 'error': 'Account limits belong to the underlying provider and are not collected here.'}
-    if provider in ('opencode-go', 'grok', 'muse'):
-        try: d = json.loads((STATE / {'opencode-go': 'go-quota.json', 'grok': 'grok-quota.json', 'muse': 'muse-quota.json'}[provider]).read_text())
+    if provider in ('opencode-go', 'grok', 'muse', 'ollama-cloud'):
+        try: d = json.loads((STATE / {'opencode-go': 'go-quota.json', 'grok': 'grok-quota.json', 'muse': 'muse-quota.json',
+                                      'ollama-cloud': 'ollama-quota.json'}[provider]).read_text())
         except (OSError, ValueError): d = {}
         result = {'limits': d.get('limits', []), 'updatedAt': d.get('updatedAt'), 'error': d.get('error', '')}
-        if provider == 'muse': result['plan'] = d.get('plan', '')
+        if provider in ('muse', 'ollama-cloud'): result['plan'] = d.get('plan', '')
         return result
     p = STATE.parent / 'agents/usage' / (provider + '.json')
     try:
@@ -839,6 +932,67 @@ def muse_quota(force=False):
         cached['error'] = str(exc) if isinstance(exc, QuotaUnavailable) else 'Muse quota unavailable. Check your Muse login.'
     cached['attemptedAt'] = time.time()
     cached['authVersion'] = auth_version
+    atomic_json(path, cached)
+    return cached
+
+
+def config_dir():
+    """Settings and key files, resolved at call time so a test or an
+    alternate XDG_CONFIG_HOME is honored."""
+    return Path(os.getenv('XDG_CONFIG_HOME', HOME / '.config')) / 'omarchy/ai-usage'
+
+
+def ollama_key(cfg=None):
+    """Ollama Cloud API key, preferring a key the user supplied over one the
+    machine happens to export. Nothing here writes or refreshes credentials."""
+    cfg = settings() if cfg is None else cfg
+    typed = str(cfg.get('ollamaApiKey') or '').strip()
+    if typed: return typed
+    from_env = str(os.getenv('OLLAMA_API_KEY') or '').strip()
+    if from_env: return from_env
+    for path in (config_dir() / 'ollama.key', Path(os.getenv('XDG_DATA_HOME', HOME / '.local/share')) / 'ollama/api_key'):
+        try: value = path.read_text().strip()
+        except OSError: continue
+        if value: return value
+    return ''
+
+
+def ollama_quota(force=False):
+    path = STATE / 'ollama-quota.json'
+    key = ollama_key()
+    key_file = config_dir() / 'ollama.key'
+    try:
+        stat = key_file.stat()
+        key_version = [stat.st_mtime_ns, stat.st_size]
+    except OSError: key_version = None
+    try: cached = json.loads(path.read_text())
+    except (OSError, ValueError): cached = {}
+    if not force and cached.get('keyVersion') == key_version and time.time() - cached.get('attemptedAt', 0) < 300: return cached
+    try:
+        if not key: raise QuotaUnavailable('Add an Ollama Cloud API key in Settings to read its usage.')
+        request = urllib.request.Request('https://ollama.com/api/usage',
+            headers={'Authorization': 'Bearer ' + key, 'User-Agent': 'Omarchy-AI-Usage/0.1'})
+        with urllib.request.urlopen(request, timeout=12) as response: data = json.load(response)
+        if not isinstance(data, dict): raise ValueError('Ollama returned an unrecognized usage response.')
+        limits = data.get('limits')
+        if not isinstance(limits, dict): raise ValueError('Ollama returned no recognized usage windows.')
+        windows = []
+        # Whatever windows the plan has. Legacy plans report session and
+        # weekly; credit plans report a monthly one. The endpoint carries no
+        # reset time, so the meters show a share without a countdown.
+        for name, label in OLLAMA_WINDOWS.items():
+            window = limits.get(name)
+            if not isinstance(window, dict) or not isinstance(window.get('usage'), (int, float)): continue
+            if not 0 <= window['usage'] <= 1: continue
+            windows.append({'label': label, 'percent': float(window['usage'])})
+        if not windows: raise ValueError('Ollama returned no recognized usage windows.')
+        plan = data.get('plan') if isinstance(data.get('plan'), str) else ''
+        cached = {'limits': windows, 'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(), 'error': '', 'plan': plan}
+    except Exception as exc:
+        # Never quote a credential-bearing request object, URL, or body.
+        cached['error'] = str(exc) if isinstance(exc, QuotaUnavailable) else 'Ollama Cloud usage unavailable. Check the API key.'
+    cached['attemptedAt'] = time.time()
+    cached['keyVersion'] = key_version
     atomic_json(path, cached)
     return cached
 
@@ -1000,6 +1154,24 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
             if isinstance(rate.get('monthly_limit_promo_usd'), (int, float)) and rate.get('promo_ends') and today.date() <= dt.date.fromisoformat(rate['promo_ends']):
                 limit, promo, promo_ends = rate['monthly_limit_promo_usd'], True, rate['promo_ends']
             go_allowance['models'].append({'model': model, 'value': value, 'limit': limit, 'promo': promo, 'promoEnds': promo_ends})
+    # Per-card model rows from the local ledger. Providers whose quota endpoint
+    # reports one aggregate number (Ollama Cloud, for example) draw a single
+    # bar, so the local token totals are the only per-model view available.
+    card_models = {}
+    for card in cards:
+        rows_for_card = {}
+        for row in ledger.db.execute(
+                'SELECT * FROM events WHERE provider=? AND ts>=? AND ts<=?', (card['provider'], start, end)):
+            r = dict(row)
+            if card['accountId'] != 'local' and assignments.get(r['id'], 'unassigned') != card['accountId']: continue
+            value = price(r, rates['document'])[0]
+            entry = rows_for_card.setdefault(r['model'], {'model': r['model'], 'tokens': 0, 'value': 0.0, 'unpriced': 0})
+            total = sum(r[f] for f in FIELDS[:4])
+            entry['tokens'] += total
+            if value is None: entry['unpriced'] += total
+            else: entry['value'] += value
+        card_models[card['id']] = sorted(rows_for_card.values(), key=lambda item: item['tokens'], reverse=True)[:4]
+    for card in cards: card['models'] = card_models.get(card['id'], [])
     return {'selection': selection, 'generatedAt': time.time(), 'period': {'days': days, 'start': str(start_date), 'end': str(today.date())},
             'accountOptions': account_options,
             'accounts': [r | {'accountId': r['name'], 'name': labels[r['name']]} for r in rows(accounts)],
@@ -1019,7 +1191,11 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
             'heatmap': dict(heatmap), 'unknownModels': sorted(unknown), 'coverage': coverage | {'earliest': earliest},
             'pricing': {'source': rates['source'], 'fetchedAtMs': rates.get('fetchedAtMs'),
                         'coveragePercent': 100 * (1 - summary['unpricedTokens']/summary['tokens']) if summary['tokens'] else None,
-                        'unpriced': [r for r in rows(models) if r['unpricedTokens']]}, 'settings': cfg, 'theme': theme()}
+                        'unpriced': [r for r in rows(models) if r['unpricedTokens']]},
+            # Reports reach the bar panel and the dashboard window. The key
+            # comes back masked so the settings form can show that one is
+            # stored without echoing it.
+            'settings': cfg | {'ollamaApiKey': OLLAMA_KEY_MASK if cfg.get('ollamaApiKey') else ''}, 'theme': theme()}
 
 
 def write_agent_record(ledger, provider):
@@ -1081,6 +1257,9 @@ def main():
             if args.action == 'scan' and 'muse' in cfg['enabled']:
                 muse_quota(args.force)
                 write_agent_record(ledger, 'muse')
+            if args.action == 'scan' and 'ollama-cloud' in cfg['enabled']:
+                ollama_quota(args.force)
+                write_agent_record(ledger, 'ollama-cloud')
             if args.action == 'scan':
                 for p in ('gemini', 'opencode', 'pi', 'omp'):
                     if p in cfg['enabled']: write_agent_record(ledger, p)

@@ -11,8 +11,11 @@ Open Settings, name the default local history group if needed, then choose **Add
 | OpenCode / OpenCode Go | Data folder containing `opencode.db` or `storage/message` |
 | Pi / Oh My Pi | Agent folder containing `sessions` |
 | Muse | Data home containing `sessions` |
+| Hermes | Hermes home containing `state.db` |
 
 An account can combine Codex, Claude, and other source folders. OpenCode and OpenCode Go need separate source entries to label both sets of routes in the same database. Folders must already be available locally or mounted. No remote sync or credentials are configured here. Missing folders appear in source coverage and can be connected later.
+
+A Hermes home (`~/.hermes`) can be labelled like any other source folder, and it carries both of the routes Hermes bills. Put it under the account whose OpenCode Go or Ollama Cloud history it belongs to; keeping it with the CLI app's folder under the same account compares the two clients' usage for one account rather than splitting them across cards.
 
 The account filter applies to charts, totals, and breakdowns. When a provider has more than one account, the daily and hourly charts draw one series per account in its own shade of the provider color: the largest account solid, the others dashed, each labelled in the hover card. The overview shows one card per account, and the Accounts table compares account/source pairs and opens their recorded sessions. Renaming an account changes its label without reimporting tokens.
 

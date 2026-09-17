@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "community.ai-usage-dashboard",
   "name": "AI Usage Dashboard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Tyler South",
   "license": "MIT",
-  "description": "Local token history, provider comparisons, and estimated API value.",
+  "description": "Local token history, provider comparisons, Ollama Cloud usage, and estimated API value.",
   "kinds": [
     "bar-widget"
   ],
@@ -15,7 +15,7 @@
   },
   "barWidget": {
     "displayName": "AI Usage Dashboard",
-    "description": "Local token history, provider comparisons, and estimated API value.",
+    "description": "Local token history, provider comparisons, Ollama Cloud usage, and estimated API value.",
     "category": "AI",
     "aliases": [
       "agents",
@@ -49,6 +49,9 @@
           "enabled": true
         },
         "muse": {
+          "enabled": true
+        },
+        "ollama-cloud": {
           "enabled": true
         }
       },

@@ -14,8 +14,13 @@ This dashboard measures recorded coding activity. A source is the app that saved
 | Pi | `~/.pi/agent/sessions` | Assistant message usage across all saved branches. Entry IDs plus original timestamps deduplicate copied branches. Cache counters are separate; reasoning is part of output. |
 | Oh My Pi | `~/.omp/agent/sessions` | The same usage categories as Pi, including current title-slot session files. Kept separate from Pi. |
 | Muse | `~/.local/share/muse/sessions` | Completed model responses (`model_completed` events) across dated and subagent session files. The retained-frame envelope is unwrapped; duplicate attribution rows are ignored. Reasoning is recorded separately and is not added to output. Responses without detailed usage are excluded. |
+| Hermes (OpenCode Go, Ollama Cloud) | `~/.hermes/state.db` | The agent's own per-route totals from `session_model_usage`, read-only. Rows are keyed by session, model, route, and task, and the table accumulates in place, so a rescan updates a row rather than adding one. Reasoning is counted separately from output, like OpenCode, and joins it in totals. The task dimension becomes the client label. |
 
 Settings accepts additional source folders, including already mounted copies from another computer. Source variables `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `GROK_HOME`, `PI_CODING_AGENT_DIR`, and `MUSE_HOME` are respected. Custom session locations outside these roots must be placed within a configured source's expected directory structure.
+
+OpenCode Go and Ollama Cloud are the two routes Hermes also bills, and it writes nothing to the CLI apps' own histories. Its rows are therefore added alongside them. The two never describe the same request: OpenCode records one row per assistant message under its own session ids, while Hermes records one accumulated row per session, model, route, and task under its own ids. Because Hermes reports at session-and-task granularity, its rows count as usage records rather than per-request rows, and its `api_call_count` is shown as model calls where a card reports them.
+
+Hermes stores no dollar estimate for these routes, so its rows price from the catalog exactly as OpenCode Go rows do, and stay marked unpriced where no rate exists.
 
 Gemini records identify projects by hash, so the dashboard labels them as Gemini project IDs. It does not guess the original filesystem path. Deleted or rewound conversation content does not refund tokens: already recorded usage stays in the metric ledger. Ephemeral sessions and calls that never write usage cannot be recovered.
 
@@ -24,6 +29,10 @@ Gemini records identify projects by hash, so the dashboard labels them as Gemini
 History and quota are independent. An expired login can stop quota updates while token history remains readable. Stale quota snapshots retain their timestamp and an error; absence is not treated as zero usage.
 
 Codex and Claude use Omarchy quota snapshots. Grok and OpenCode Go have collectors in this package. Gemini can display an existing Omarchy snapshot. General OpenCode, Pi, and Oh My Pi can use several accounts and providers, so the dashboard does not assign them one quota or subscription price automatically. Muse quota (current session window and weekly allowance) is read from the existing Muse login and refreshed on scan. If the sign-in expires, run `muse login` to restore quota.
+
+Ollama Cloud usage is read from `GET https://ollama.com/api/usage` with an API key. This endpoint is not documented by Ollama and the web settings page is its only other consumer, so it can change or disappear; when it fails, the previous snapshot stays with its timestamp and an error, and nothing else in the dashboard is affected. The response reports a fraction of each plan window under `limits`, which the meter shows directly. Legacy plans carry a session window that resets every 5 hours and a weekly one; credit plans carry a monthly window. Only the windows a plan actually reports are shown, and the endpoint supplies no reset time, so those meters show a share without a countdown. It counts GPU time on request counts rather than tokens, so the Go card's value-against-allowance view does not apply here.
+
+The key is read from Settings, then `OLLAMA_API_KEY`, then `~/.config/omarchy/ai-usage/ollama.key`. It is never written anywhere but the settings file, never refreshed, and never leaves the request it authenticates. Reports the dashboard renders carry a mask in place of a stored key, so nothing that displays usage receives the secret itself.
 
 Grok's completed-turn dollar estimate is used directly. Positive recorded API estimates from OpenCode/Pi/Oh My Pi take precedence over catalog prices. Otherwise exact catalog matches are used and missing prices remain unpriced. See [pricing policy](pricing.md).
 
@@ -36,7 +45,7 @@ Grok's completed-turn dollar estimate is used directly. Positive recorded API es
 
 ## Validation
 
-The new Gemini, Pi, and Oh My Pi parsers are tested against fixtures based on their public formats. There is no real history from those three apps on the development machine, so live session validation remains distinct from fixture coverage. Grok was reconciled against retained local events, including copied history. OpenCode Go and the two retained non-Go OpenCode messages were reconciled against the local database; multi-route and legacy migration behavior also has fixture coverage.
+The new Gemini, Pi, and Oh My Pi parsers are tested against fixtures based on their public formats. There is no real history from those three apps on the development machine, so live session validation remains distinct from fixture coverage. Grok was reconciled against retained local events, including copied history. OpenCode Go and the two retained non-Go OpenCode messages were reconciled against the local database; multi-route and legacy migration behavior also has fixture coverage. Hermes-sourced rows were reconciled against the agent's own ledger totals for both routes, and the two ledgers were confirmed to share no session ids.
 
 Sources reviewed September 5, 2026:
 

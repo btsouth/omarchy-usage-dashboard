@@ -69,8 +69,12 @@ Both install options run without sudo and keep working if you move or delete the
 | OpenCode | Other model providers used through OpenCode | Not collected |
 | Pi / Oh My Pi | Saved assistant usage | Not collected |
 | Muse | Completed model responses, including subagents | From the existing Muse login |
+| Ollama Cloud | Hermes agent sessions and background work | From an Ollama Cloud API key |
+| Hermes (OpenCode Go, Ollama Cloud) | Agent sessions, including background work | Not collected; the card shows the current login |
 
-Sources with recorded history appear automatically on a fresh install. Use **Settings** to choose which ones to show. OpenCode Go uses your existing API key; no cookie setup is needed. If Grok authentication expires, run `grok login`.
+Sources with recorded history appear automatically on a fresh install. Use **Settings** to choose which ones to show. OpenCode Go uses your existing API key; no cookie setup is needed. If Grok authentication expires, run `grok login`. Ollama Cloud is the one source that may need a key: type it in **Settings**, export `OLLAMA_API_KEY`, or put it in `~/.config/omarchy/ai-usage/ollama.key`.
+
+Hermes records its own per-route totals, and OpenCode Go reaches the same account through two apps now. Both are counted: OpenCode's transcripts carry the per-request detail from the OpenCode client, and Hermes sessions are added from its own ledger. The two share no session or message ids, so nothing is double counted. Hermes rows can additionally be split by what they were for (typed prompts versus title generation, compression, vision, approvals, and background review) in the client breakdown.
 
 Normal ChatGPT, Grok web, and Gemini web conversations are not included. Cursor, Copilot, Windsurf, and Antigravity are not supported. See [provider coverage](docs/provider-coverage.md) for formats and validation limits.
 
@@ -85,10 +89,10 @@ Account labels group history, not credentials. **All accounts** shows the curren
 ## Understanding the numbers
 
 - **Processed tokens** count reused context on every request. They are not a count of unique text.
-- **API value** uses recorded estimates or catalog prices. OpenCode Go follows the documented model rates, including peak-hour doubling for DeepSeek and the per-model monthly allowances shown on the Go card. It is not your subscription bill. Missing prices stay marked as unpriced.
+- **API value** uses recorded estimates or catalog prices. OpenCode Go follows the documented model rates, including peak-hour doubling for DeepSeek and the per-model monthly allowances shown on the Go card. Ollama Cloud follows its published rates, including the 12:00-18:00 UTC peak window for the DeepSeek models. It is not your subscription bill. Missing prices stay marked as unpriced.
 - **Per-session averages** cover recorded activity in the selected period. A session is not a completed task or a model-efficiency benchmark.
 
-History refreshes every 15 minutes, along with OpenCode Go and enabled Grok quota. **Refresh** also requests fresh Codex and Claude limits from Omarchy. See [pricing details](docs/pricing.md) for rates and accounting.
+History refreshes every 15 minutes, along with OpenCode Go, Ollama Cloud, and enabled Grok quota. **Refresh** also requests fresh Codex and Claude limits from Omarchy. See [pricing details](docs/pricing.md) for rates and accounting.
 
 Metrics stay on your machine. The ledger stores counters, model names, project paths, session IDs, and timestamps. It does not copy conversation bodies or credentials. There is no telemetry.
 
