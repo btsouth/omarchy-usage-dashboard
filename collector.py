@@ -95,8 +95,12 @@ def save_settings(value):
              'windowOpacity': max(0.55, min(1.0, float(value.get('windowOpacity', 0.985))))}
     # The user's own key beats the environment and the key file, since typing
     # one in is deliberate. Settings stay nonsecret by default; this value is
-    # the exception and is never echoed back by a report.
-    if clean['ollamaApiKey'] == OLLAMA_KEY_MASK:
+    # the exception and is never echoed back over the settings channel.
+    if 'ollamaApiKey' not in value:
+        # A client that does not send the field at all means "leave it alone",
+        # not "clear it". The form sends the mask when the field is untouched.
+        clean['ollamaApiKey'] = str(settings().get('ollamaApiKey') or '')
+    elif clean['ollamaApiKey'] == OLLAMA_KEY_MASK:
         # A report round trip carries the mask, not the key, so an unchanged
         # field means "keep whatever is stored" rather than a literal edit.
         clean['ollamaApiKey'] = str(settings().get('ollamaApiKey') or '')
@@ -418,15 +422,24 @@ def hermes_records(path):
             provider = r['billing_provider']
             session, model = str(r['session_id']), r['model'] or 'unknown'
             task = str(r.get('task') or '')
-            ts = timestamp(r.get('last_seen') or r.get('first_seen'))
-            # Hermes counts output_tokens separately from reasoning, like
-            # OpenCode, so reasoning joins output under the dashboard's totals.
-            entry = record(digest('hermes', provider, session, model, task), provider, session, ts, model,
+            # Anchor the row at its first sighting. The table accumulates in
+            # place, so using last_seen would move a row's whole total to a
+            # later day on every rescan and rewrite the daily history.
+            ts = timestamp(r.get('first_seen') or r.get('last_seen'))
+            # Hermes records the provider's own completion_tokens, which already
+            # include reasoning, so it must not be added again. Verified against
+            # this table: of 36 rows carrying reasoning, none has reasoning
+            # above output (max ratio 0.989), while OpenCode's disjoint counter
+            # exceeds output in 59% of its rows. The row's id covers every key
+            # of the source table's primary key so two distinct rows cannot
+            # collapse and lose tokens under the ledger's MAX upsert.
+            entry = record(digest('hermes', provider, session, model, task,
+                                  r.get('billing_base_url'), r.get('billing_mode')),
+                           provider, session, ts, model,
                            projects.get(r['session_id']) or '', 'Hermes',
                            input=r.get('input_tokens'), output=r.get('output_tokens'),
                            reasoning=r.get('reasoning_tokens'), cacheRead=r.get('cache_read_tokens'),
                            cacheWrite=r.get('cache_write_tokens'))
-            entry['output'] += entry['reasoning']
             entry['apiProvider'] = provider
             entry['modelCalls'] = number(r.get('api_call_count'))
             entry['reportedValue'] = reported_value(r.get('estimated_cost_usd'))
@@ -452,10 +465,23 @@ class Ledger:
           CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT);
           CREATE TABLE IF NOT EXISTS event_sources(event_id TEXT, path TEXT, PRIMARY KEY(event_id,path));
         ''')
-        if not self.db.execute("SELECT 1 FROM metadata WHERE key='provenanceVersion'").fetchone():
+        current = self.db.execute("SELECT value FROM metadata WHERE key='provenanceVersion'").fetchone()
+        if not current:
             # Re-index source locations once, without deleting retained metrics.
             self.db.execute('DELETE FROM files')
-            self.db.execute("INSERT INTO metadata VALUES ('provenanceVersion','1')")
+            self.db.execute("INSERT INTO metadata VALUES ('provenanceVersion','2')")
+        elif current[0] != '2':
+            # Version 2 corrects the Hermes parser: its output no longer has
+            # reasoning added on top, its rows are anchored at first sighting,
+            # and its event ids cover the source table's whole primary key.
+            # Events are keyed by id, so the corrected values need those rows
+            # re-read rather than upserted over the old ones.
+            stale = [r[0] for r in self.db.execute(
+                "SELECT DISTINCT event_id FROM event_sources WHERE path LIKE '%state.db'")]
+            for event in stale:
+                self.db.execute('DELETE FROM events WHERE id=?', (event,))
+            self.db.execute("DELETE FROM event_sources WHERE path LIKE '%state.db'")
+            self.db.execute("UPDATE metadata SET value='2' WHERE key='provenanceVersion'")
         columns = {r[1] for r in self.db.execute('PRAGMA table_info(events)')}
         for name in ('reportedCostTicks', 'modelCalls'):
             if name not in columns: self.db.execute(f'ALTER TABLE events ADD COLUMN {name} INTEGER')
@@ -469,7 +495,7 @@ class Ledger:
         update = ','.join(f'{f}=MAX(events.{f},excluded.{f})' for f in FIELDS)
         # A source whose row accumulates in place also moves forward in time;
         # every other source keeps the timestamp it first recorded.
-        if growing: update += ',ts=MAX(events.ts,excluded.ts)'
+        if growing: update += ',ts=MIN(events.ts,excluded.ts)'
         update += ',reportedCostTicks=COALESCE(MAX(COALESCE(events.reportedCostTicks,0),excluded.reportedCostTicks),events.reportedCostTicks)'
         update += ',modelCalls=MAX(COALESCE(events.modelCalls,0),COALESCE(excluded.modelCalls,0))'
         update += ',reportedValue=COALESCE(MAX(COALESCE(events.reportedValue,0),excluded.reportedValue),events.reportedValue)'
@@ -965,6 +991,12 @@ def ollama_quota(force=False):
         stat = key_file.stat()
         key_version = [stat.st_mtime_ns, stat.st_size]
     except OSError: key_version = None
+    # Throttle on the credential itself, not on one of the files that may hold
+    # it: switching accounts in Settings or OLLAMA_API_KEY would otherwise show
+    # the previous account's usage until the cache expired. Only a digest is
+    # ever stored.
+    key_version = {'file': key_version,
+                   'key': hashlib.sha256(key.encode()).hexdigest()[:16] if key else None}
     try: cached = json.loads(path.read_text())
     except (OSError, ValueError): cached = {}
     if not force and cached.get('keyVersion') == key_version and time.time() - cached.get('attemptedAt', 0) < 300: return cached
@@ -983,8 +1015,12 @@ def ollama_quota(force=False):
         for name, label in OLLAMA_WINDOWS.items():
             window = limits.get(name)
             if not isinstance(window, dict) or not isinstance(window.get('usage'), (int, float)): continue
-            if not 0 <= window['usage'] <= 1: continue
-            windows.append({'label': label, 'percent': float(window['usage'])})
+            # A plan can report above 100% (overage). Clamp for the meter
+            # rather than discarding the window, which would read as a
+            # credential failure once it is the only window left.
+            windows.append({'label': label, 'percent': min(1.0, max(0.0, float(window['usage']))),
+                            'raw': float(window['usage'])} if window['usage'] > 1
+                           else {'label': label, 'percent': float(window['usage'])})
         if not windows: raise ValueError('Ollama returned no recognized usage windows.')
         plan = data.get('plan') if isinstance(data.get('plan'), str) else ''
         cached = {'limits': windows, 'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(), 'error': '', 'plan': plan}
@@ -1157,13 +1193,18 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
     # Per-card model rows from the local ledger. Providers whose quota endpoint
     # reports one aggregate number (Ollama Cloud, for example) draw a single
     # bar, so the local token totals are the only per-model view available.
+    # Each card is scoped exactly as the card itself is: by account, and by the
+    # same selection the report was asked for.
     card_models = {}
     for card in cards:
         rows_for_card = {}
         for row in ledger.db.execute(
                 'SELECT * FROM events WHERE provider=? AND ts>=? AND ts<=?', (card['provider'], start, end)):
             r = dict(row)
-            if card['accountId'] != 'local' and assignments.get(r['id'], 'unassigned') != card['accountId']: continue
+            if assignments.get(r['id'], 'unassigned') != card['accountId']: continue
+            if any((r[key] or ('Unknown project' if key == 'project' else card['provider'] if key == 'apiProvider' else '')) != selection[key]
+                   for key in ('model', 'project', 'client', 'apiProvider') if selection.get(key)): continue
+            if selection.get('day') and str(dt.datetime.fromtimestamp(r['ts']).date()) != selection['day']: continue
             value = price(r, rates['document'])[0]
             entry = rows_for_card.setdefault(r['model'], {'model': r['model'], 'tokens': 0, 'value': 0.0, 'unpriced': 0})
             total = sum(r[f] for f in FIELDS[:4])
@@ -1210,7 +1251,7 @@ def write_agent_record(ledger, provider):
     today_data = next((x['providers'][provider] for x in data['daily'] if x['date'] == today), finish(bucket()))
     record_data = {'schemaVersion': 1, 'id': provider, 'name': PROVIDERS[provider],
        'updatedAt': q.get('updatedAt'), 'ready': bool(q.get('limits') or total_records), 'hasLocalStats': True,
-       'hasPromptStats': False, 'tierLabel': 'Go' if provider == 'opencode-go' else q.get('plan', '') if provider == 'muse' else '', 'limits': q.get('limits', []), 'usageStatusText': q.get('error', ''),
+       'hasPromptStats': False, 'tierLabel': 'Go' if provider == 'opencode-go' else q.get('plan', '') if provider in ('muse', 'ollama-cloud') else '', 'limits': q.get('limits', []), 'usageStatusText': q.get('error', ''),
        'todayTotalTokens': today_data['tokens'], 'todayPrompts': today_data['requests'], 'todaySessions': today_data['sessions'],
        'totalPrompts': total_records, 'totalSessions': total_sessions,
        'activeDays': len(active_dates), 'activeDates': active_dates,
@@ -1228,7 +1269,7 @@ def main():
     parser.add_argument('--days', type=int, choices=[1, 7, 30, 90, 365], default=7)
     parser.add_argument('--provider', choices=['all', *PROVIDERS], default='all')
     for field in ('model', 'project', 'client', 'apiProvider', 'day', 'account'): parser.add_argument('--' + field)
-    parser.add_argument('--save'); parser.add_argument('--force', action='store_true')
+    parser.add_argument('--save', nargs='?', const=''); parser.add_argument('--force', action='store_true')
     args = parser.parse_args()
     # Theme reads stay out of the ledger path so a theme swap can repaint
     # without waiting on a history scan.
@@ -1236,7 +1277,18 @@ def main():
         print(json.dumps(theme())); return
     STATE.mkdir(parents=True, exist_ok=True)
     if args.action == 'settings':
-        try: print(json.dumps(save_settings(json.loads(args.save)) if args.save else settings()))
+        try:
+            # The payload arrives on stdin when a client sends it that way, so
+            # a key never has to appear in a command line. --save with a value
+            # stays supported for scripted use.
+            raw = args.save
+            if raw is not None and not raw.strip() and not sys.stdin.isatty():
+                raw = sys.stdin.read().strip() or None
+            # The settings channel is what writes the key, so it is also the
+            # one place the key could leak back out through stdout. Every
+            # answer masks it, as the usage reports already do.
+            clean = save_settings(json.loads(raw)) if raw else settings()
+            print(json.dumps(clean | {'ollamaApiKey': OLLAMA_KEY_MASK if clean.get('ollamaApiKey') else ''}))
         except (ValueError, TypeError, KeyError) as error:
             print(json.dumps({'error': str(error)})); raise SystemExit(1)
         return

@@ -1,7 +1,10 @@
 import datetime as dt
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import sqlite3
 import unittest
@@ -780,9 +783,14 @@ class CollectorTests(unittest.TestCase):
         go = records[0]['row']
         self.assertEqual((go['provider'], go['session'], go['model'], go['project'], go['client']),
                          ('opencode-go', 's1', 'deepseek-v4.1-flash', '/home/user/Projects/toolport', 'Hermes'))
-        # Hermes counts reasoning separately from output, like OpenCode.
-        self.assertEqual((go['input'], go['output'], go['reasoning'], go['cacheRead']), (1000, 500, 300, 5000))
-        self.assertEqual(go['ts'], 1789000100)
+        # Reasoning stays a separate column and is never added to output:
+        # Hermes stores the provider's completion_tokens, which already
+        # include it, unlike OpenCode's disjoint counter.
+        self.assertEqual((go['input'], go['output'], go['reasoning'], go['cacheRead']), (1000, 200, 300, 5000))
+        self.assertEqual(sum(go[f] for f in c.FIELDS[:4]), 6200)
+        # Anchored at first_seen, not last_seen: the source row accumulates in
+        # place and its whole total must not migrate to a later day.
+        self.assertEqual(go['ts'], 1789000000)
         self.assertEqual(go['modelCalls'], 4)
         self.assertEqual(records[1]['row']['provider'], 'ollama-cloud')
         self.assertEqual(records[1]['task'], 'background review')
@@ -796,16 +804,18 @@ class CollectorTests(unittest.TestCase):
         db.execute('UPDATE session_model_usage SET input_tokens=4000, output_tokens=500, api_call_count=9, last_seen=1789000900.0')
         db.commit(); db.close()
         for item in c.hermes_records(path): ledger.put(item['row'], path, growing=True)
+        # Counters grow; the timestamp stays at the first sighting so a row's
+        # whole total cannot migrate to a later day and rewrite daily history.
         self.assertEqual(ledger.db.execute('SELECT COUNT(*),SUM(input),SUM(output),MAX(ts),MAX(modelCalls) FROM events').fetchone(),
-                         (1, 4000, 800, 1789000900, 9))
+                         (1, 4000, 500, 1789000000, 9))
         ledger.db.close()
 
     def test_hermes_and_opencode_go_both_count_without_overlap(self):
         # No OpenCode transcript exists for the Hermes session, and no Hermes
         # row exists for the OpenCode session, so the two add up.
-        path = self.hermes_ledger([{'session_id': '20260916_221601_30d7b7', 'input_tokens': 100,
+        path = self.hermes_ledger([{'session_id': '20260901_120000_a1b2c3', 'input_tokens': 100,
                                     'output_tokens': 10, 'reasoning_tokens': 0, 'cache_read_tokens': 0}],
-                                  sessions=[('20260916_221601_30d7b7', '/home/user')])
+                                  sessions=[('20260901_120000_a1b2c3', '/home/user')])
         ledger = c.Ledger(self.root / 'both.sqlite')
         ledger.put({**c.record('opencode-session-event', 'opencode-go', 'ses_abc', 1789000000, 'deepseek-v4.1-flash',
                                '/home/user', 'OpenCode', input=700, output=70), 'apiProvider': 'opencode-go'})
@@ -855,7 +865,8 @@ class CollectorTests(unittest.TestCase):
     def test_ollama_quota_maps_whatever_windows_the_plan_reports(self):
         payload = {'limits': {'session': {'usage': 0.046, 'models': [{'name': 'glm-5.2', 'request_count': 34}]},
                               'weekly': {'usage': 0.051, 'models': [{'name': 'glm-5.2', 'request_count': 254}]}}}
-        with patch.dict('os.environ', {'OLLAMA_API_KEY': 'test-ollama-key', 'XDG_CONFIG_HOME': str(self.root / 'config')}), \
+        with patch.dict('os.environ', {'OLLAMA_API_KEY': 'test-ollama-key', 'XDG_CONFIG_HOME': str(self.root / 'config'),
+                'XDG_DATA_HOME': str(self.root / 'data')}), \
              patch.object(c.urllib.request, 'urlopen', side_effect=self.ollama_urlopen(payload)):
             quota = c.ollama_quota(True)
             self.assertEqual(c.quota('ollama-cloud')['limits'][0]['label'], 'Session (5-hour)')
@@ -868,7 +879,8 @@ class CollectorTests(unittest.TestCase):
 
     def test_ollama_quota_accepts_a_monthly_credit_plan(self):
         payload = {'limits': {'monthly': {'usage': 0.0, 'models': [{'name': 'deepseek-v4.1-flash', 'request_count': 18}]}}}
-        with patch.dict('os.environ', {'OLLAMA_API_KEY': 'test-ollama-key', 'XDG_CONFIG_HOME': str(self.root / 'config')}), \
+        with patch.dict('os.environ', {'OLLAMA_API_KEY': 'test-ollama-key', 'XDG_CONFIG_HOME': str(self.root / 'config'),
+                'XDG_DATA_HOME': str(self.root / 'data')}), \
              patch.object(c.urllib.request, 'urlopen', side_effect=self.ollama_urlopen(payload)):
             quota = c.ollama_quota(True)
         self.assertEqual(quota['error'], '')
@@ -898,7 +910,12 @@ class CollectorTests(unittest.TestCase):
     def test_ollama_key_precedence_and_no_key_message(self):
         config = self.root / 'config/omarchy/ai-usage'
         config.mkdir(parents=True, exist_ok=True)
-        with patch.dict('os.environ', {'XDG_CONFIG_HOME': str(self.root / 'config')}), patch.object(c.urllib.request, 'urlopen') as request:
+        # Every credential source must be inside the fixture: a real
+        # OLLAMA_API_KEY or an Ollama CLI key file on the machine would
+        # otherwise decide this test's outcome.
+        with patch.dict('os.environ', {'XDG_CONFIG_HOME': str(self.root / 'config'),
+                                       'XDG_DATA_HOME': str(self.root / 'data'), 'OLLAMA_API_KEY': ''}), \
+             patch.object(c.urllib.request, 'urlopen') as request:
             c.atomic_json(c.CONFIG, c.DEFAULTS)
             quota = c.ollama_quota(True)
             self.assertIn('Settings', quota['error'])
@@ -912,7 +929,8 @@ class CollectorTests(unittest.TestCase):
         import io
         def failing(request, timeout=12):
             raise c.urllib.error.HTTPError(request.full_url, 401, 'Unauthorized', {}, io.BytesIO(b'bad test-ollama-key'))
-        with patch.dict('os.environ', {'OLLAMA_API_KEY': 'test-ollama-key', 'XDG_CONFIG_HOME': str(self.root / 'config')}), \
+        with patch.dict('os.environ', {'OLLAMA_API_KEY': 'test-ollama-key', 'XDG_CONFIG_HOME': str(self.root / 'config'),
+                'XDG_DATA_HOME': str(self.root / 'data')}), \
              patch.object(c.urllib.request, 'urlopen', side_effect=failing):
             quota = c.ollama_quota(True)
         self.assertNotIn('test-ollama-key', json.dumps(quota))
@@ -943,6 +961,55 @@ class CollectorTests(unittest.TestCase):
                       input=1_000_000, output=1_000_000)
         self.assertAlmostEqual(c.price(go, rates['document'])[0], 0.15 + 0.50, places=6)
         self.assertIsNone(rates['document'].get('glm-5.3-flash'))
+
+    def test_hermes_rows_distinguish_source_primary_keys(self):
+        # The source table's primary key includes the billing route spelling, so
+        # two rows differing only there are distinct and must not collapse into
+        # one ledger event (which MAX would silently under-count).
+        path = self.hermes_ledger([
+            {'billing_base_url': 'https://opencode.ai/zen/go/v1', 'input_tokens': 500},
+            {'billing_base_url': 'https://opencode.ai/zen/go/v1/', 'input_tokens': 500}])
+        ledger = c.Ledger(self.root / 'pk.sqlite')
+        for item in c.hermes_records(path): ledger.put(item['row'], path, growing=True)
+        self.assertEqual(ledger.db.execute('SELECT COUNT(*),SUM(input) FROM events').fetchone(), (2, 1000))
+        ledger.db.close()
+
+    def test_settings_accepts_a_stdin_payload_and_masks_the_reply(self):
+        # The UI sends the payload on stdin so a key never reaches argv.
+        env = dict(os.environ, XDG_CONFIG_HOME=str(self.root / 'config'), XDG_STATE_HOME=str(self.root / 'state'))
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).parents[1] / 'collector.py'), 'settings', '--save'],
+            input='{"ollamaApiKey":"stdin-key","enabled":["ollama-cloud"]}',
+            capture_output=True, text=True, env=env, cwd=str(self.root))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('stdin-key', result.stdout)
+        self.assertEqual(json.loads(result.stdout)['ollamaApiKey'], c.OLLAMA_KEY_MASK)
+        stored = json.loads((self.root / 'config/omarchy/ai-usage/settings.json').read_text())
+        self.assertEqual(stored['ollamaApiKey'], 'stdin-key')
+
+    def test_settings_channel_never_echoes_the_key(self):
+        with patch.dict('os.environ', {'XDG_CONFIG_HOME': str(self.root / 'config')}):
+            saved = c.save_settings(c.DEFAULTS | {'ollamaApiKey': 'typed-key'})
+            self.assertEqual(saved['ollamaApiKey'], 'typed-key')
+            # A payload that omits the key entirely must leave it alone rather
+            # than clear it (the form sends the mask when the field is
+            # untouched, but a client may simply not send the field).
+            kept = c.save_settings({k: v for k, v in saved.items() if k != 'ollamaApiKey'})
+            self.assertEqual(kept['ollamaApiKey'], 'typed-key')
+            # An explicit empty string is a deliberate clear.
+            cleared = c.save_settings(saved | {'ollamaApiKey': ''})
+            self.assertEqual(cleared['ollamaApiKey'], '')
+
+    def test_over_quota_window_is_clamped_not_dropped(self):
+        payload = {'limits': {'monthly': {'usage': 1.5}}}
+        with patch.dict('os.environ', {'OLLAMA_API_KEY': 'test-ollama-key', 'XDG_CONFIG_HOME': str(self.root / 'config'),
+                                       'XDG_DATA_HOME': str(self.root / 'data')}), \
+             patch.object(c.urllib.request, 'urlopen', side_effect=self.ollama_urlopen(payload)):
+            quota = c.ollama_quota(True)
+        # An over-limit plan shows as full, not as a credential failure.
+        self.assertEqual(quota['error'], '')
+        self.assertEqual(quota['limits'][0]['percent'], 1.0)
+        self.assertEqual(quota['limits'][0]['raw'], 1.5)
 
     def test_settings_keep_a_stored_ollama_key_and_report_only_masks_it(self):
         with patch.dict('os.environ', {'XDG_CONFIG_HOME': str(self.root / 'config')}):

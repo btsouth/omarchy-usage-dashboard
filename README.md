@@ -70,11 +70,11 @@ Both install options run without sudo and keep working if you move or delete the
 | Pi / Oh My Pi | Saved assistant usage | Not collected |
 | Muse | Completed model responses, including subagents | From the existing Muse login |
 | Ollama Cloud | Hermes agent sessions and background work | From an Ollama Cloud API key |
-| Hermes (OpenCode Go, Ollama Cloud) | Agent sessions, including background work | Not collected; the card shows the current login |
+| Hermes (OpenCode Go, Ollama Cloud) | Agent sessions, including background work | Not collected; adds to the Go and Ollama Cloud cards |
 
-Sources with recorded history appear automatically on a fresh install. Use **Settings** to choose which ones to show. OpenCode Go uses your existing API key; no cookie setup is needed. If Grok authentication expires, run `grok login`. Ollama Cloud is the one source that may need a key: type it in **Settings**, export `OLLAMA_API_KEY`, or put it in `~/.config/omarchy/ai-usage/ollama.key`.
+Sources with recorded history appear automatically on a fresh install. Use **Settings** to choose which ones to show. OpenCode Go uses your existing API key; no cookie setup is needed. If Grok authentication expires, run `grok login`. Ollama Cloud is the one source that may need a key: type it in **Settings**, export `OLLAMA_API_KEY`, or put it in `~/.config/omarchy/ai-usage/ollama.key` (the key file an Ollama CLI install would use is also read, if one exists).
 
-Hermes records its own per-route totals, and OpenCode Go reaches the same account through two apps now. Both are counted: OpenCode's transcripts carry the per-request detail from the OpenCode client, and Hermes sessions are added from its own ledger. The two share no session or message ids, so nothing is double counted. Hermes rows can additionally be split by what they were for (typed prompts versus title generation, compression, vision, approvals, and background review) in the client breakdown.
+Hermes records its own per-route totals, and OpenCode Go reaches the same account through two apps now. Both are counted: OpenCode's transcripts carry the per-request detail from the OpenCode client, and Hermes sessions are added from its own ledger. The two share no session or message ids, so nothing is double counted, and the added total reconciles to the agent's own ledger exactly. Hermes rows can additionally be split by what they were for (typed prompts versus title generation, compression, vision, approvals, and background review) in the client breakdown.
 
 Normal ChatGPT, Grok web, and Gemini web conversations are not included. Cursor, Copilot, Windsurf, and Antigravity are not supported. See [provider coverage](docs/provider-coverage.md) for formats and validation limits.
 

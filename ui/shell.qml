@@ -125,7 +125,11 @@ Scope {
     }
     function resetText(value) {
         var seconds = (Date.parse(value) - Date.now()) / 1000
-        if (!isFinite(seconds)) return "Reset unavailable"
+        // No timestamp is not a state worth a permanent line: providers that
+        // report a share without a reset time (Ollama Cloud) would otherwise
+        // carry "Reset unavailable" under every meter forever, and the bar
+        // panel already omits the line for the same case.
+        if (!isFinite(seconds)) return ""
         if (seconds <= 0) return "Awaiting reset update"
         return "Resets in " + (seconds >= 86400 ? Math.floor(seconds/86400)+"d " : "") + (seconds >= 3600 ? Math.floor(seconds/3600)%24+"h" : Math.ceil(seconds/60)+"m")
     }
@@ -164,7 +168,8 @@ Scope {
         var s = {accounts: draftAccounts, localAccountLabel: draftLocalLabel, enabled: draftEnabled, monthlyPrices: prices, windowOpacity: opacitySlider.value,
                  ledgerSyncDir: draftLedgerSyncDir, ledgerDeviceId: draftLedgerDeviceId, ollamaApiKey: draftOllamaKey}
         homeOptions.forEach(h => s[h.key] = (draftHomes[h.key] || "").split("\n").filter(x => x.trim()).map(x => x.trim()))
-        save.command = ["python3", helper, "settings", "--save", JSON.stringify(s)]
+        save.command = ["python3", helper, "settings", "--save"]
+        save.payload = JSON.stringify(s)
         save.running = true
     }
     Process {
@@ -180,6 +185,11 @@ Scope {
     }
     Process {
         id: save
+        // The payload rides stdin, never argv: it can carry an API key, and a
+        // command line is world-readable in /proc while the process lives.
+        property string payload: ""
+        stdinEnabled: true
+        onStarted: { write(payload + "\n"); payload = "" }
         stdout: StdioCollector { onStreamFinished: { try { root.saveError = JSON.parse(text).error || "" } catch(e) {} } }
         onExited: function(code) {
             if (code === 0) { root.settingsOpen = false; root.selection = ({}); root.navigation = []; root.provider = "all"; root.notice = "Settings saved"; root.refresh() }

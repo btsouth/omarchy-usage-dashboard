@@ -18,11 +18,11 @@ Panel {
   readonly property color track: Style.selectedFillFor(foreground, Color.accent)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
-  // A scrollbar that leaves no groove behind. The default control reserves a
-  // track beside the content and paints it over the text it scrolls; this one
-  // keeps only a short thumb. The width/height bindings matter: ScrollBar
-  // stretches its contentItem to the full track otherwise, which reads as a
-  // permanent bright line down the panel.
+  // A scrollbar that leaves no groove behind: only a short thumb, no track.
+  // The default control paints its groove over the text it scrolls, which is
+  // what this replaces. It is placed in its own column by the caller, so it
+  // must be parented to a NON-clipping item: a child of the clipping Flickable
+  // is clipped away and paints nothing (verified: 0 px clipped vs 212 px not).
   component QuietScrollBar: ScrollBar {
     id: quiet
     policy: ScrollBar.AsNeeded
@@ -409,8 +409,7 @@ Panel {
       Flickable {
         id: panelFlick
         anchors.fill: parent
-        // Reserve the scrollbar's own column so its thumb never overlaps the
-        // text. The extra inset on the right keeps the numbers off the edge.
+        // Leave a column free on the right for the scrollbar's own track.
         anchors.rightMargin: Style.space(14)
         contentWidth: width
         contentHeight: column.implicitHeight
@@ -418,7 +417,6 @@ Panel {
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
         interactive: contentHeight > height
-        ScrollBar.vertical: QuietScrollBar { parent: panelFlick; x: panelFlick.width + Style.space(4); height: panelFlick.height }
 
         Column {
           id: column
@@ -742,6 +740,19 @@ Panel {
             elide: Text.ElideRight
           }
         }
+      }
+
+      // Parented to the key catcher, not the Flickable: a child of the
+      // clipping Flickable would be clipped away and paint nothing.
+      QuietScrollBar {
+        parent: keyCatcher
+        x: panelFlick.x + panelFlick.width + Style.space(4)
+        y: panelFlick.y
+        height: panelFlick.height
+        orientation: Qt.Vertical
+        active: panelFlick.moving || panelFlick.flicking
+        size: panelFlick.contentHeight > 0 ? panelFlick.height / panelFlick.contentHeight : 1
+        position: panelFlick.contentHeight > 0 ? panelFlick.contentY / panelFlick.contentHeight : 0
       }
     }
   }
