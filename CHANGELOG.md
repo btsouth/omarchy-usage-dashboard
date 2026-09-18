@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Fix saving preferences: the save waited for its input stream to close, which never happens when the dashboard hands the payload over, so the first click left the button disabled for the rest of the window's life and wrote nothing. The save now finishes as soon as the payload arrives, a save that receives no payload reports the failure instead of closing the window as if it had worked, and a save that never returns is abandoned after fifteen seconds rather than leaving the button dead.
+- Fix saving preferences: the save waited for its input stream to close, which never happens when the dashboard hands the payload over, so the first click left the button disabled for the rest of the window's life and wrote nothing. The save now finishes as soon as the payload arrives, it still reads a payload a scripted caller writes a moment later, a save that receives no payload reports the failure instead of closing the window as if it had worked, and a save that never returns is asked to stop after fifteen seconds and then killed, so the button cannot stay dead.
+- Refuse a price or an opacity that is not a number with a fixed sentence instead of repeating the value, so a key pasted into the wrong field cannot come back in the message the window shows, and answer a payload that is not a JSON object with that same channel instead of a traceback.
 
 ## 1.3.0 - 2026-09-17
 

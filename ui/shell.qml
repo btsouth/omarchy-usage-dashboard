@@ -202,10 +202,13 @@ Scope {
     Timer {
         // A save that never returns would leave Save preferences disabled for
         // the life of the window, which reads as a button that does nothing.
-        // Killing it exits nonzero, so the window reports the failure and the
-        // button comes back. A local settings write has nothing to wait on.
-        running: save.running; interval: 15000
-        onTriggered: save.running = false
+        // Ask it to stop first, then insist: killing it exits nonzero, so the
+        // window reports the failure and the button comes back. A local
+        // settings write has nothing to wait on.
+        property int attempts: 0
+        running: save.running; interval: 15000; repeat: true
+        onTriggered: { attempts += 1; if (attempts > 1) save.signal(9); else save.running = false }
+        onRunningChanged: if (!running) attempts = 0
     }
     Process {
         id: live

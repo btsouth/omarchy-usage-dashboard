@@ -101,22 +101,23 @@ def masked_settings(cfg):
                   for field in ('ollamaApiKey', 'commandcodeApiKey')}
 
 
-def stdin_payload(stream=None, timeout=5.0, idle=0.25):
+def stdin_payload(stream=None, timeout=5.0, idle=1.0):
     """The settings payload a client wrote to stdin, read without waiting for
     the end of input.
 
     A GUI client hands this process a live pipe and holds its write end open
     for as long as the process runs, so reading to the end of file blocks the
     save forever: no settings written, no exit, and a Save button that never
-    comes back. Stop as soon as the bytes parse as JSON, and give up after
-    `idle` seconds of silence, bounded by `timeout`, so a client that opens
-    stdin and writes nothing still returns.
+    comes back. Stop as soon as the bytes parse as JSON. The first byte gets
+    `timeout` seconds, since a client may open the pipe before it writes, and
+    each later gap gets `idle`, so a writer that goes quiet mid-payload cannot
+    hold the save open. `timeout` also caps the whole read.
     """
     stream = sys.stdin if stream is None else stream
     try:
         if stream is None or stream.isatty(): return None
     except (AttributeError, ValueError): return None
-    deadline, chunks, wait = time.monotonic() + timeout, [], idle
+    deadline, chunks, wait = time.monotonic() + timeout, [], timeout
     while True:
         wait = min(wait, deadline - time.monotonic())
         if wait <= 0: break
@@ -128,19 +129,25 @@ def stdin_payload(stream=None, timeout=5.0, idle=0.25):
         if not chunk: break  # The writer closed: that is the end of the payload.
         chunks.append(chunk)
         try: json.loads(b''.join(chunks))
-        except (UnicodeDecodeError, ValueError): continue
+        except (UnicodeDecodeError, ValueError): wait = idle; continue
         break
     return b''.join(chunks).decode('utf-8', 'replace').strip() or None
 
 
 def save_settings(value):
+    if not isinstance(value, dict): raise ValueError('Send the settings as a JSON object.')
+    # Refuse a value that is not a number with a fixed sentence. A message that
+    # repeated the value would print whatever was typed or pasted into that
+    # field, and a key pasted into the wrong field is exactly that.
+    try: opacity = float(value.get('windowOpacity', 0.985))
+    except (TypeError, ValueError): raise ValueError('Give the window opacity as a number.')
     clean = {'enabled': [p for p in value.get('enabled', []) if p in PROVIDERS],
              'monthlyPrices': {}, **{key: [] for key in HOME_KEYS},
              'accounts': [], 'localAccountLabel': str(value.get('localAccountLabel') or 'Local').strip(),
              'ledgerSyncDir': '', 'ledgerDeviceId': str(value.get('ledgerDeviceId') or '').strip(),
              'ollamaApiKey': str(value.get('ollamaApiKey') or '').strip(),
              'commandcodeApiKey': str(value.get('commandcodeApiKey') or '').strip(),
-             'windowOpacity': max(0.55, min(1.0, float(value.get('windowOpacity', 0.985))))}
+             'windowOpacity': max(0.55, min(1.0, opacity))}
     # The user's own key beats the environment and the key file, since typing
     # one in is deliberate. Settings stay nonsecret by default; these values
     # are the exception and are never echoed back over the settings channel.
@@ -183,8 +190,11 @@ def save_settings(value):
     # A price key is a provider (local history) or a labelled account id.
     account_ids = {account['id'] for account in clean['accounts']}
     for name, amount in value.get('monthlyPrices', {}).items():
-        if (name in PROVIDERS or name in account_ids) and amount is not None and 0 <= float(amount) <= 100000:
-            clean['monthlyPrices'][name] = float(amount)
+        if name not in PROVIDERS and name not in account_ids: continue
+        if amount is None: continue
+        try: price = float(amount)
+        except (TypeError, ValueError): raise ValueError('Give each monthly price as a number.')
+        if 0 <= price <= 100000: clean['monthlyPrices'][name] = price
     atomic_json(CONFIG, clean)
     return clean
 
@@ -1449,7 +1459,7 @@ def main():
             # answer masks it, as the usage reports already do.
             clean = save_settings(json.loads(raw)) if raw else settings()
             print(json.dumps(masked_settings(clean)))
-        except (ValueError, TypeError, KeyError) as error:
+        except (ValueError, TypeError, KeyError, AttributeError) as error:
             print(json.dumps({'error': str(error)})); raise SystemExit(1)
         return
     with (STATE / 'collector.lock').open('w') as lock:

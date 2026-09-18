@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import sqlite3
 import unittest
 from unittest.mock import patch
@@ -1057,12 +1058,57 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(stored['ollamaApiKey'], 'stdin-key')
 
     def settings_save(self, env):
+        """A settings save with a live, still-open stdin pipe, the way the
+        window starts one. Returns the process and its three pipes."""
         child = subprocess.Popen(
             [sys.executable, str(Path(__file__).parents[1] / 'collector.py'), 'settings', '--save'],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env, cwd=str(self.root))
-        assert child.stdin and child.stdout
-        self.addCleanup(child.kill); self.addCleanup(child.stdin.close); self.addCleanup(child.stdout.close)
-        return child
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, cwd=str(self.root))
+        stdin, stdout, stderr = child.stdin, child.stdout, child.stderr
+        assert stdin and stdout and stderr
+        self.addCleanup(child.kill)
+        for pipe in (stdin, stdout, stderr): self.addCleanup(pipe.close)
+        return child, stdin, stdout, stderr
+
+    def test_settings_save_reads_a_payload_that_arrives_late(self):
+        # A scripted caller can open the pipe and write a moment later. Only a
+        # quiet gap between chunks is short; the first byte gets the full wait.
+        env = dict(os.environ, XDG_CONFIG_HOME=str(self.root / 'config'), XDG_STATE_HOME=str(self.root / 'state'))
+        child, stdin, stdout, stderr = self.settings_save(env)
+        time.sleep(0.6)
+        stdin.write('{"enabled": ["codex"], "monthlyPrices": {"codex": 200}}\n'); stdin.flush()
+        try:
+            child.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            self.fail('the save gave up on a payload that arrived after 0.6s')
+        self.assertEqual(child.returncode, 0, stderr.read())
+        stored = json.loads((self.root / 'config/omarchy/ai-usage/settings.json').read_text())
+        self.assertEqual(stored['monthlyPrices'], {'codex': 200.0})
+
+    def test_settings_save_keeps_a_stray_value_out_of_the_error_text(self):
+        # A key pasted into a price or opacity field must not come back in the
+        # error: the window renders whatever this channel prints.
+        env = dict(os.environ, XDG_CONFIG_HOME=str(self.root / 'config'), XDG_STATE_HOME=str(self.root / 'state'))
+        for payload in ({'enabled': ['codex'], 'monthlyPrices': {'codex': 'CANARY-typed-in-the-wrong-field'}},
+                        {'enabled': ['codex'], 'windowOpacity': 'CANARY-typed-in-the-wrong-field'}):
+            with self.subTest(payload=payload):
+                child, stdin, stdout, stderr = self.settings_save(env)
+                stdin.write(json.dumps(payload) + '\n'); stdin.flush()
+                child.wait(timeout=15)
+                out, err = stdout.read(), stderr.read()
+                self.assertEqual(child.returncode, 1, out)
+                self.assertIn('error', json.loads(out))
+                self.assertNotIn('CANARY', out + err)
+                self.assertFalse((self.root / 'config/omarchy/ai-usage/settings.json').exists())
+
+    def test_settings_save_rejects_a_payload_that_is_not_an_object(self):
+        env = dict(os.environ, XDG_CONFIG_HOME=str(self.root / 'config'), XDG_STATE_HOME=str(self.root / 'state'))
+        child, stdin, stdout, stderr = self.settings_save(env)
+        stdin.write('[1, 2]\n'); stdin.flush()
+        child.wait(timeout=15)
+        out, err = stdout.read(), stderr.read()
+        self.assertEqual(child.returncode, 1, err)
+        self.assertIn('error', json.loads(out))
+        self.assertNotIn('Traceback', err)
 
     def test_settings_save_finishes_while_the_client_holds_stdin_open(self):
         # A GUI client keeps the write end of the pipe open for as long as the
@@ -1070,14 +1116,13 @@ class CollectorTests(unittest.TestCase):
         # back: no settings written, no exit, and a Save button that stays
         # disabled for the life of the window.
         env = dict(os.environ, XDG_CONFIG_HOME=str(self.root / 'config'), XDG_STATE_HOME=str(self.root / 'state'))
-        child = self.settings_save(env)
-        child.stdin.write('{"monthlyPrices": {"commandcode": 20}, "enabled": ["codex"]}\n')
-        child.stdin.flush()
+        child, stdin, stdout, stderr = self.settings_save(env)
+        stdin.write('{"monthlyPrices": {"commandcode": 20}, "enabled": ["codex"]}\n'); stdin.flush()
         try:
             child.wait(timeout=15)
         except subprocess.TimeoutExpired:
             self.fail('the save waited for end of input instead of writing the settings')
-        self.assertEqual(child.returncode, 0, child.stdout.read())
+        self.assertEqual(child.returncode, 0, stderr.read())
         stored = json.loads((self.root / 'config/omarchy/ai-usage/settings.json').read_text())
         self.assertEqual(stored['monthlyPrices'], {'commandcode': 20.0})
 
@@ -1085,13 +1130,13 @@ class CollectorTests(unittest.TestCase):
         # An empty stdin used to fall through to reading the settings, which
         # exits 0: the window closed with "Settings saved" and wrote nothing.
         env = dict(os.environ, XDG_CONFIG_HOME=str(self.root / 'config'), XDG_STATE_HOME=str(self.root / 'state'))
-        child = self.settings_save(env)
+        child, stdin, stdout, stderr = self.settings_save(env)
         try:
             child.wait(timeout=15)
         except subprocess.TimeoutExpired:
             self.fail('the save waited for end of input instead of reporting the missing payload')
         self.assertEqual(child.returncode, 1)
-        self.assertIn('error', json.loads(child.stdout.read()))
+        self.assertIn('error', json.loads(stdout.read()))
         self.assertFalse((self.root / 'config/omarchy/ai-usage/settings.json').exists())
 
     def test_settings_channel_never_echoes_the_key(self):
