@@ -1030,6 +1030,30 @@ class CollectorTests(unittest.TestCase):
                          ['deepseek-v4.1-flash', 'glm-5.3-flash'])
         self.assertEqual([row['model'] for row in filtered['goAllowance']['models']], ['deepseek-v4.1-flash'])
 
+    def test_excluded_sources_leave_every_surface(self):
+        # Leaving a source out of a view must remove it everywhere at once: the
+        # summary, the cards, the breakdowns, and the model filter's own list.
+        # Anything left behind contradicts the page it sits on.
+        ledger, families = self.model_family_ledger()
+        ledger.put(c.record('gpt', 'codex', 'codex-session', 1789000000, 'gpt-6-astra', '/p', 'CLI', input=5000, output=500))
+        cfg = c.DEFAULTS | {'enabled': list(families) + ['codex']}
+        now = dt.datetime(2026, 9, 16, 12).astimezone()
+        with patch.object(c, 'quota', return_value={'limits': []}), \
+             patch.object(c, 'account_quotas', return_value=({}, {})), patch.object(c, 'theme', return_value={}):
+            plain = c.report(ledger, cfg, days=365, now=now)
+            without = c.report(ledger, cfg, days=365, now=now, selection={'excludeSource': ['codex']})
+            both_ways = c.report(ledger, cfg, days=365, now=now, selection={'excludeSource': ['codex', 'codex']})
+        self.assertEqual([row['name'] for row in plain['models']], ['deepseek-v4.1-flash', 'gpt-6-astra', 'glm-5.2'])
+        self.assertEqual([row['name'] for row in without['models']], ['deepseek-v4.1-flash', 'glm-5.2'])
+        self.assertEqual(without['summary']['tokens'], plain['summary']['tokens'] - 5500)
+        self.assertNotIn('codex', {route['provider'] for row in without['models'] for route in row['routes']})
+        self.assertNotIn('codex', {row['provider'] for row in without['accounts']})
+        self.assertNotIn('codex', {card['provider'] for card in without['cards']})
+        self.assertNotIn('gpt-6-astra', [option['name'] for option in without['modelOptions']])
+        self.assertEqual(sum(row['tokens'] for row in without['models']), without['summary']['tokens'])
+        # Naming the same source twice is the same view, not a different one.
+        self.assertEqual(both_ways['summary']['tokens'], without['summary']['tokens'])
+
     def test_ollama_key_precedence_and_no_key_message(self):
         config = self.root / 'config/omarchy/ai-usage'
         config.mkdir(parents=True, exist_ok=True)

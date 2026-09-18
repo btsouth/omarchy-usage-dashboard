@@ -1360,6 +1360,10 @@ def selected(r, selection, provider):
 
 def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
     selection = selection or {}
+    # Sources left out of this view. They are dropped before anything is
+    # accumulated, so the summary, the cards, every breakdown, and the model
+    # filter's own list all describe the same set of sources.
+    excluded_sources = {str(name) for name in (selection.get('excludeSource') or []) if name}
     today = now or dt.datetime.now().astimezone()
     start_date = today.date() - dt.timedelta(days=days - 1)
     # Local calendar boundaries, including DST transitions.
@@ -1401,6 +1405,7 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
         account = assignments.get(r['id'], 'unassigned')
         if selection.get('account') and account != selection['account']: continue
         if p not in providers or (provider != 'all' and p != provider): continue
+        if p in excluded_sources: continue
         day = str(dt.datetime.fromtimestamp(r['ts']).date())
         # Recorded before the selection is applied, so the model options describe
         # what this scope holds rather than what is currently being looked at.
@@ -1504,7 +1509,7 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
     # windows, so value against each model's documented monthly limit is
     # estimated from local history during the current monthly reset window.
     go_allowance = {'since': None, 'models': []}
-    if 'opencode-go' in providers:
+    if 'opencode-go' in providers and 'opencode-go' not in excluded_sources:
         monthly = next((limit for limit in quota('opencode-go').get('limits', []) if limit.get('label') == 'Monthly' and limit.get('resetsAt')), None)
         go_allowance['since'] = int(timestamp(monthly['resetsAt']) - 30 * 86400) if monthly else int(dt.datetime.combine(today.date().replace(day=1), dt.time()).timestamp())
         used = {}
@@ -1619,6 +1624,9 @@ def main():
     parser.add_argument('--days', type=int, choices=[1, 7, 30, 90, 365], default=7)
     parser.add_argument('--provider', choices=['all', *PROVIDERS], default='all')
     for field in ('model', 'project', 'client', 'apiProvider', 'day', 'account'): parser.add_argument('--' + field)
+    # A source (provider) can be left out of a view without turning it off in
+    # settings: repeat the flag once per source to exclude.
+    parser.add_argument('--excludeSource', action='append', default=[])
     parser.add_argument('--save', nargs='?', const=''); parser.add_argument('--force', action='store_true')
     args = parser.parse_args()
     # Theme reads stay out of the ledger path so a theme swap can repaint
@@ -1676,7 +1684,7 @@ def main():
             if args.action == 'scan':
                 for p in ('gemini', 'opencode', 'pi', 'omp'):
                     if p in cfg['enabled']: write_agent_record(ledger, p)
-        if args.action == 'report': print(json.dumps(report(ledger, cfg, args.days, args.provider, selection={k: getattr(args, k) for k in ('model', 'project', 'client', 'apiProvider', 'day', 'account') if getattr(args, k)})))
+        if args.action == 'report': print(json.dumps(report(ledger, cfg, args.days, args.provider, selection={k: getattr(args, k) for k in ('model', 'project', 'client', 'apiProvider', 'day', 'account', 'excludeSource') if getattr(args, k)})))
         elif args.action == 'scan': print(json.dumps({'ok': True, 'events': ledger.db.execute('SELECT COUNT(*) FROM events').fetchone()[0]}))
         elif args.action == 'go': print(json.dumps({'ok': not bool(quota('opencode-go').get('error'))}))
         ledger.db.close()

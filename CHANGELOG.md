@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Leave a source out of the view by switching its chip off in the source row. Its history leaves the summary, the chart, the cards, the Go allowance card, and every breakdown at once, and the chip goes struck through with the filter line naming it, so a view never quietly hides something. **Overview** brings every source back. It is a view filter: Settings still decides what this machine collects, so nothing stops being counted. The source chips are a filter now rather than a focus control, and a source that a row had drilled into keeps its highlight until the filter is cleared.
+
 - Keep the summary card's session line inside its border. It was one unwrapped line, so a history long enough to add "· partial value" drew past the card's right edge and into the gap before the chart card. It wraps now, and the card takes its height from the column inside it, so the extra line cannot push the rest of the text below the bottom edge either.
 
 - Keep the bar panel's provider row on one line as providers are added. The row shares the width evenly, so a fixed panel width squeezes it once a sixth provider appears and the labels clip, because those chips do not elide. The panel now asks for the width the chip row actually needs (measured against the real Button and Style tokens: 425 for five chips, 511 for six) and never exceeds the screen, so a new provider needs no width change by hand.

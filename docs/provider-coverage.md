@@ -32,6 +32,8 @@ A model selection follows the same grouping. Choosing a grouped row, or invoking
 
 The dashboard offers that selection as a filter: a row of models under the accounts narrows the whole page without moving off it, and a Models-table row filters and then opens that model's sessions. Everything filtered is genuinely filtered: the summary, the previous-period comparison, the chart, the provider cards, the Go allowance card's model list, and every breakdown, because one selection is applied before any of them is accumulated. The list of models offered is deliberately not narrowed by the filter itself, or it would collapse to the entry already chosen and a model could not be swapped without clearing first; it does follow the period, a chosen day, the route tab, and the account filter.
 
+A source can be left out the same way. The source row under the title switches one source's history out of the view, and `report --excludeSource <id>` does it for a scripted report; the source is dropped before anything is accumulated, so the summary, the cards, the model filter's own list, and every breakdown agree. This is a view filter and nothing more: settings still decide what the machine collects, and the source keeps being counted for later periods. Excluding a source also drops it from the Go allowance card and, when a row had drilled into that source, clears that scope rather than showing an empty page.
+
 Gemini records identify projects by hash, so the dashboard labels them as Gemini project IDs. It does not guess the original filesystem path. Deleted or rewound conversation content does not refund tokens: already recorded usage stays in the metric ledger. Ephemeral sessions and calls that never write usage cannot be recovered.
 
 ## Limits and pricing

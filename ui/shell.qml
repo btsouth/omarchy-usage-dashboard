@@ -56,6 +56,28 @@ Scope {
         return top
     }
     function clearSelection() { navigation = []; selection = ({}); tableLimit = 20; refresh() }
+    function isExcluded(id) { return (selection.excludeSource || []).indexOf(id) >= 0 }
+    function toggleSource(id) {
+        // A source switched off leaves the whole view without leaving the
+        // collection: settings decides what this machine collects, this decides
+        // what this view shows.
+        navigation = navigation.concat([{selection:selection,provider:provider,breakdown:breakdown}])
+        var list = (selection.excludeSource || []).slice()
+        var at = list.indexOf(id)
+        if (at >= 0) list.splice(at, 1); else list.push(id)
+        var next = Object.assign({}, selection)
+        if (list.length) next.excludeSource = list; else delete next.excludeSource
+        selection = next
+        if (at < 0 && provider === id) provider = "all"
+        tableLimit = 20; refresh()
+    }
+    function filterText() {
+        return Object.keys(selection).map(function(k) {
+            if (k === "account") return k+": "+(root.data.accountOptions.find(a=>a.id===root.selection[k]) || {}).label || root.selection[k]
+            if (k === "excludeSource") return "excluded: "+root.selection[k].map(id=>root.providerName(id)).join(", ")
+            return k+": "+root.selection[k]
+        }).join(" · ")
+    }
     function when(ts) { return ts ? Qt.formatDateTime(new Date(ts*1000), "MMM d, yyyy HH:mm") : "No recorded activity" }
     property string breakdown: "models"
     property bool settingsOpen: false
@@ -151,7 +173,14 @@ Scope {
         if (scan.running) { pending = true; return }
         error = ""
         scan.command = ["python3", helper, "report", "--days", String(days), "--provider", provider]
-        for (var field in selection) scan.command = scan.command.concat(["--"+field, selection[field]])
+        for (var field in selection) {
+            // A list-valued filter (excluded sources) repeats its flag once per
+            // entry, which is how the collector's own argument takes them.
+            var value = selection[field]
+            if (Array.isArray(value)) {
+                for (var i = 0; i < value.length; i++) scan.command = scan.command.concat(["--"+field, String(value[i])])
+            } else scan.command = scan.command.concat(["--"+field, String(value)])
+        }
         scan.running = true
     }
     function refreshLive() {
@@ -297,6 +326,7 @@ Scope {
         function captureTooltip(path: string): void { chartTip.contentItem.grabToImage(result => result.saveToFile(path)) }
         function account(id: string): void { root.drill("account", id, "") }
         function model(name: string): void { root.filterBy("model", name, "") }
+        function toggleSource(id: string): void { root.toggleSource(id) }
         function metric(name: string): void { root.metric = name }
         function preferences(): void { root.openSettings() }
         function overview(): void { root.settingsOpen = false }
@@ -316,16 +346,19 @@ Scope {
     component Choice: Button {
         id: control
         property bool selected: false
+        // A source switched off in a filter row: dimmed and struck through, so a
+        // view that leaves something out looks like one at a glance.
+        property bool excluded: false
         implicitHeight: 34
         leftPadding: 14; rightPadding: 14
         Accessible.name: text
         background: Rectangle {
             radius: 3
-            color: control.down ? Qt.alpha(root.ink,0.18) : control.selected ? Qt.alpha(root.ink,0.13) : control.hovered ? Qt.alpha(root.ink,0.07) : "transparent"
+            color: control.excluded ? Qt.alpha(root.ink,0.03) : control.down ? Qt.alpha(root.ink,0.18) : control.selected ? Qt.alpha(root.ink,0.13) : control.hovered ? Qt.alpha(root.ink,0.07) : "transparent"
             Behavior on color { ColorAnimation { duration: 110 } }
-            border.color: control.activeFocus ? root.accent : control.selected ? Qt.alpha(root.ink,0.26) : "transparent"
+            border.color: control.activeFocus ? root.accent : control.excluded ? Qt.alpha(root.ink,0.08) : control.selected ? Qt.alpha(root.ink,0.26) : "transparent"
         }
-        contentItem: Label { text: control.text; color: control.selected ? root.bright : root.muted; font.pixelSize: 12; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+        contentItem: Label { text: control.text; color: control.excluded ? Qt.alpha(root.ink,0.42) : control.selected ? root.bright : root.muted; font.pixelSize: 12; font.strikeout: control.excluded; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
     }
     component Card: Rectangle { color: root.surface; border.color: root.edge; radius: 4 }
     component HoverTip: ToolTip {
@@ -446,7 +479,19 @@ Scope {
                     Layout.fillWidth: true; spacing: 6
                     Repeater {
                         model: [{id: "all", name: "Overview"}].concat(root.data ? root.data.settings.enabled.map(p => ({id:p,name:root.providerName(p)})) : [])
-                        Choice { required property var modelData; text: modelData.name; selected: root.provider === modelData.id; onClicked: { root.provider = modelData.id; root.refresh() } }
+                        Choice {
+                            required property var modelData
+                            text: modelData.name
+                            // Overview means every source. The rest switch one source
+                            // out of the view and back, which changes what is shown
+                            // without changing what this machine collects.
+                            selected: modelData.id === "all" ? root.provider === "all" && !(root.selection.excludeSource || []).length : root.provider === modelData.id
+                            excluded: modelData.id !== "all" && root.isExcluded(modelData.id)
+                            onClicked: {
+                                if (modelData.id === "all") { root.provider = "all"; if ((root.selection.excludeSource || []).length) root.filterBy("excludeSource", "") ; else root.refresh() }
+                                else root.toggleSource(modelData.id)
+                            }
+                        }
                     }
                 }
                 Repeater {
@@ -470,7 +515,7 @@ Scope {
             RowLayout {
                 visible: !root.settingsOpen && Object.keys(root.selection).length > 0
                 Layout.fillWidth: true
-                Label { Layout.fillWidth: true; elide: Text.ElideMiddle; text: Object.keys(root.selection).map(k => k+": "+(k === "account" ? (root.data.accountOptions.find(a=>a.id===root.selection[k]) || {}).label || root.selection[k] : root.selection[k])).join(" · ") }
+                Label { Layout.fillWidth: true; elide: Text.ElideMiddle; text: root.filterText() }
                 Choice { visible: root.navigation.length > 0; text: "Back"; onClicked: root.goBack() }
                 Choice { text: "Clear filters"; onClicked: root.clearSelection() }
             }
