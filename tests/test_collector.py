@@ -989,6 +989,47 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual([(row['name'], row['tokens']) for row in data['models']], [('mystery-model', 2200)])
         self.assertEqual(data['unknownModels'], ['mystery-model'])
 
+    def test_model_options_list_every_model_in_the_period(self):
+        # The filter's own list must not narrow to the current selection, or a
+        # reader could not switch models without clearing the filter first.
+        ledger, families = self.model_family_ledger()
+        cfg = c.DEFAULTS | {'enabled': list(families)}
+        now = dt.datetime(2026, 9, 16, 12).astimezone()
+        with patch.object(c, 'quota', return_value={'limits': []}), \
+             patch.object(c, 'account_quotas', return_value=({}, {})), patch.object(c, 'theme', return_value={}):
+            plain = c.report(ledger, cfg, days=365, now=now)
+            filtered = c.report(ledger, cfg, days=365, now=now, selection={'model': 'deepseek-v4.1-flash'})
+            route = c.report(ledger, cfg, days=365, provider='ollama-cloud', now=now)
+            short = c.report(ledger, cfg, days=1, now=now)
+        self.assertEqual([(o['name'], o['tokens']) for o in plain['modelOptions']],
+                         [('deepseek-v4.1-flash', 4 * 6100), ('glm-5.2', 1100)])
+        # Four route spellings of one model are a single option, like the table.
+        self.assertEqual([o['name'] for o in filtered['modelOptions']], [o['name'] for o in plain['modelOptions']])
+        # Scoped to the route tab, and to the period on screen.
+        self.assertEqual([o['name'] for o in route['modelOptions']], ['deepseek-v4.1-flash', 'glm-5.2'])
+        self.assertEqual(short['modelOptions'], [])
+
+    def test_go_allowance_rows_follow_the_model_filter(self):
+        # The allowance card must not list models the rest of the page excludes.
+        ledger = c.Ledger(self.root / 'allowance-filter.sqlite')
+        self.addCleanup(ledger.db.close)
+        ledger.put(c.opencode_record('m1', 's', '2026-09-14T12:00:00Z', '/p', 'deepseek-v4.1-flash', 'opencode-go', {'input': 1_000_000}, 0))
+        ledger.put(c.opencode_record('m2', 's', '2026-09-14T12:00:00Z', '/p', 'glm-5.3-flash', 'opencode-go', {'input': 1_000_000}, 0))
+        rates = {'source': 'test', 'document': {
+            'opencode-go/deepseek-v4.1-flash': {'input_cost_per_token': .000001, 'output_cost_per_token': 0,
+                                                'cache_read_input_token_cost': 0, 'monthly_limit_usd': 15},
+            'opencode-go/glm-5.3-flash': {'input_cost_per_token': .000002, 'output_cost_per_token': 0,
+                                          'cache_read_input_token_cost': 0, 'monthly_limit_usd': 60}}}
+        cfg = c.DEFAULTS | {'enabled': ['opencode-go']}
+        with patch.object(c, 'load_rates', return_value=rates), patch.object(c, 'theme', return_value={}), \
+             patch.object(c, 'quota', return_value={'limits': [{'label': 'Monthly', 'resetsAt': '2026-10-01T00:00:00+00:00'}]}):
+            plain = c.report(ledger, cfg, 7, now=dt.datetime(2026, 9, 15).astimezone())
+            filtered = c.report(ledger, cfg, 7, now=dt.datetime(2026, 9, 15).astimezone(),
+                                selection={'model': 'deepseek-v4.1-flash'})
+        self.assertEqual(sorted(row['model'] for row in plain['goAllowance']['models']),
+                         ['deepseek-v4.1-flash', 'glm-5.3-flash'])
+        self.assertEqual([row['model'] for row in filtered['goAllowance']['models']], ['deepseek-v4.1-flash'])
+
     def test_ollama_key_precedence_and_no_key_message(self):
         config = self.root / 'config/omarchy/ai-usage'
         config.mkdir(parents=True, exist_ok=True)

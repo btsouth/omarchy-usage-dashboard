@@ -1384,6 +1384,11 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
     models, projects, clients, sessions, routes, accounts = {}, {}, {}, {}, {}, {}
     model_routes = {}
     unpriced = {}
+    # The model filter's own options: every model this scope recorded in the
+    # period. Grouped like the Models table, and deliberately NOT narrowed by the
+    # model selection, or the list would vanish to the one entry already chosen
+    # and a reader could not switch models without clearing the filter first.
+    model_options = {}
     labels, assignments = account_assignments(ledger, cfg)
     provider_accounts = {p: set() for p in providers}
     heatmap = collections.Counter()
@@ -1397,6 +1402,13 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
         if selection.get('account') and account != selection['account']: continue
         if p not in providers or (provider != 'all' and p != provider): continue
         day = str(dt.datetime.fromtimestamp(r['ts']).date())
+        # Recorded before the selection is applied, so the model options describe
+        # what this scope holds rather than what is currently being looked at.
+        # The period, a chosen day, the route tab, and the account filter all
+        # still apply, since those decide which history is in view at all.
+        if start <= r['ts'] <= end and (not selection.get('day') or day == selection['day']):
+            family_name = model_family(r['model'])
+            model_options[family_name] = model_options.get(family_name, 0) + sum(r[f] for f in FIELDS[:4])
         if not selected(r, selection, p): continue
         if selection.get('day') and day != selection['day']: continue
         heatmap[day] += sum(r[f] for f in FIELDS[:4])
@@ -1498,6 +1510,9 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
         used = {}
         for row in ledger.db.execute('SELECT * FROM events WHERE provider=? AND ts>=? AND ts<=?', ('opencode-go', go_allowance['since'], end)):
             r = dict(row)
+            # The allowance rows follow the model filter too, so the card cannot
+            # list models the rest of the page is excluding.
+            if selection.get('model') and model_family(r['model']) != model_family(selection['model']): continue
             rate = rates['document'].get('opencode-go/' + r['model']) or rates['document'].get(r['model'])
             if not isinstance(rate, dict) or not isinstance(rate.get('monthly_limit_usd'), (int, float)): continue
             entry = used.setdefault(r['model'], [rate, 0.0])
@@ -1548,6 +1563,8 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
     model_rows.sort(key=lambda x: x['tokens'], reverse=True)
     return {'selection': selection, 'generatedAt': time.time(), 'period': {'days': days, 'start': str(start_date), 'end': str(today.date())},
             'accountOptions': account_options,
+            'modelOptions': [{'id': name, 'name': name, 'tokens': tokens}
+                             for name, tokens in sorted(model_options.items(), key=lambda item: item[1], reverse=True)],
             'accounts': [r | {'accountId': r['name'], 'name': labels[r['name']]} for r in rows(accounts)],
             'accountWarning': 'Copies of the same history belong to different accounts. Move mirrored folders into one account.' if any(a == 'conflict' for p, a in accounts) else '',
             'availableProviders': [{'id': p, 'name': name} for p, name in PROVIDERS.items()],

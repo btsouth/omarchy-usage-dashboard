@@ -30,12 +30,30 @@ Scope {
         tableLimit = 20; refresh()
     }
     property int tableLimit: 20
-    function drill(field, name, providerId) {
+    function filterBy(field, name, providerId) {
+        // Narrowing the page leaves the reader where they are; an empty name
+        // clears that field, which is what the All chips do.
         navigation = navigation.concat([{selection:selection,provider:provider,breakdown:breakdown}])
-        var next = Object.assign({}, selection); next[field] = name
+        var next = Object.assign({}, selection)
+        if (name === "") delete next[field]; else next[field] = name
         selection = next
         if (providerId) provider = providerId
-        breakdown = "sessions"; tableLimit = 20; refresh()
+        tableLimit = 20; refresh()
+    }
+    function drill(field, name, providerId) {
+        // Opening a row also narrows the page, then shows the sessions behind it.
+        filterBy(field, name, providerId)
+        breakdown = "sessions"
+    }
+    function modelChips(options, selectedName) {
+        // The row stays switchable while a filter is on: the selected model keeps
+        // its chip even when it falls outside the most-used ones.
+        var top = options.slice(0, 8)
+        if (selectedName && !top.some(o => o.id === selectedName)) {
+            var extra = options.find(o => o.id === selectedName)
+            if (extra) top = top.concat([extra])
+        }
+        return top
     }
     function clearSelection() { navigation = []; selection = ({}); tableLimit = 20; refresh() }
     function when(ts) { return ts ? Qt.formatDateTime(new Date(ts*1000), "MMM d, yyyy HH:mm") : "No recorded activity" }
@@ -278,6 +296,8 @@ Scope {
         function capture(path: string): void { captureRoot.grabToImage(result => result.saveToFile(path)) }
         function captureTooltip(path: string): void { chartTip.contentItem.grabToImage(result => result.saveToFile(path)) }
         function account(id: string): void { root.drill("account", id, "") }
+        function model(name: string): void { root.filterBy("model", name, "") }
+        function metric(name: string): void { root.metric = name }
         function preferences(): void { root.openSettings() }
         function overview(): void { root.settingsOpen = false }
         function period(days: int): void { root.days = days; root.refresh() }
@@ -431,13 +451,19 @@ Scope {
                 }
                 Repeater {
                     model: [1,7,30,90,365]
-                    Choice { required property int modelData; text: modelData === 1 ? "Today" : modelData === 365 ? "Year" : modelData + "d"; selected: root.days === modelData; onClicked: { root.days = modelData; root.navigation = []; root.selection = root.selection.account ? {account:root.selection.account} : ({}); root.refresh() } }
+                    Choice { required property int modelData; text: modelData === 1 ? "Today" : modelData === 365 ? "Year" : modelData + "d"; selected: root.days === modelData; onClicked: { root.days = modelData; root.navigation = []; var keep = Object.assign({}, root.selection); delete keep.day; root.selection = keep; root.refresh() } }
                 }
             }
             Flow { Layout.fillWidth: true; spacing: 8; visible: !root.settingsOpen && !!root.data
-                Choice { text: "All accounts"; selected: !root.selection.account; onClicked: { var s=Object.assign({},root.selection); delete s.account; root.selection=s; root.refresh() } }
+                Choice { text: "All accounts"; selected: !root.selection.account; onClicked: root.filterBy("account","") }
                 Repeater { model: root.data ? root.data.accountOptions : []
                     Choice { required property var modelData; text: modelData.label; selected: root.selection.account===modelData.id; onClicked: root.drill("account",modelData.id,"") }
+                }
+            }
+            Flow { Layout.fillWidth: true; spacing: 8; visible: !root.settingsOpen && !!root.data && (root.data.modelOptions.length > 1 || !!root.selection.model)
+                Choice { text: "All models"; selected: !root.selection.model; onClicked: root.filterBy("model","") }
+                Repeater { model: root.data ? root.modelChips(root.data.modelOptions, root.selection.model) : []
+                    Choice { required property var modelData; text: modelData.name; selected: root.selection.model===modelData.id; onClicked: root.filterBy("model",modelData.id,"") }
                 }
             }
             Sub { Layout.fillWidth: true; visible: !root.settingsOpen && !!root.data && !!root.data.accountWarning; text: root.data ? root.data.accountWarning : ""; wrapMode: Text.WordWrap }
@@ -465,7 +491,7 @@ Scope {
                         Column {
                             id: pricingNote
                             anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 14; spacing: 6
-                            Label { width: parent.width; wrapMode: Text.WordWrap; text: root.data ? (root.data.summary.tokens === 0 ? "No activity in this period. Add a history folder in Settings or use a supported coding agent." : root.data.summary.unpricedTokens ? root.compact(root.data.summary.unpricedTokens)+" tokens have no complete price. API value is a partial estimate." : "All recorded tokens in this view have an API-value estimate.") : "Checking pricing coverage…"; color: root.data && root.data.summary.unpricedTokens ? root.colorFor("claude") : root.ink }
+                            Label { width: parent.width; wrapMode: Text.WordWrap; text: root.data ? (root.data.summary.tokens === 0 ? (Object.keys(root.selection).length ? "No activity for this filter in this period. Clear filters to see the rest of the history." : "No activity in this period. Add a history folder in Settings or use a supported coding agent.") : root.data.summary.unpricedTokens ? root.compact(root.data.summary.unpricedTokens)+" tokens have no complete price. API value is a partial estimate." : "All recorded tokens in this view have an API-value estimate.") : "Checking pricing coverage…"; color: root.data && root.data.summary.unpricedTokens ? root.colorFor("claude") : root.ink }
                             Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.data ? "History on "+(root.data.coverage.machine || "this computer")+" · scanned "+root.when(root.data.coverage.scannedAt)+" · "+(root.data.pricing.coveragePercent===null ? "No activity" : (root.data.summary.unpricedTokens && root.data.pricing.coveragePercent>99.9 ? ">99.9" : root.data.pricing.coveragePercent.toFixed(1))+"% of tokens priced") : "" }
                         }
                     }
@@ -482,10 +508,20 @@ Scope {
                                 Label {
                                     text: {
                                         if (!root.data) return ""
-                                        if (Object.keys(root.selection).length) return "Filtered activity"
                                         if (root.metric !== "tokens" && (root.data.summary.unpricedTokens || root.data.previous.unpricedTokens)) return "Value comparison incomplete"
                                         var cur=root.amount(root.data.summary), prev=root.amount(root.data.previous)
-                                        return prev > 0 ? (cur >= prev ? "↑ " : "↓ ") + Math.abs((cur/prev-1)*100).toFixed(1) + (root.days === 1 ? "% vs yesterday so far" : "% vs previous period") : "No previous-period baseline"
+                                        // A filter narrows both periods the same way, so the
+                                        // comparison stays valid and is worth showing.
+                                        var span = root.days === 1 ? "yesterday so far" : "previous period"
+                                        if (prev <= 0) return Object.keys(root.selection).length
+                                            ? (root.days === 1 ? "No yesterday data for this filter" : "No previous period for this filter")
+                                            : "No previous-period baseline"
+                                        // A model that only just started can be hundreds of times
+                                        // its previous period, and a five-digit percentage reads as
+                                        // a bug, so say the multiple once it is that large.
+                                        var ratio = cur/prev
+                                        if (ratio >= 10) return "↑ " + Math.round(ratio) + "x " + span
+                                        return (cur >= prev ? "↑ " : "↓ ") + Math.abs((ratio-1)*100).toFixed(1) + "% vs " + span
                                     }
                                     color: root.accent
                                 }

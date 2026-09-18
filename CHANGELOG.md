@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Filter the whole page by model, so the summary cards, the chart, the provider cards, and every breakdown describe one model across all the routes that served it: its cached and uncached input, its output, its cache savings, and its API value, all its own. Pick one from the row under the accounts, or open a Models-table row, which also jumps to that model's sessions. Changing the period keeps the filter, so one model over 30 days is a single extra click.
+- Show the period comparison under a filter instead of the words "Filtered activity", since both periods are narrowed the same way and the figure is valid, and say plainly when a filter matches nothing rather than suggesting a history folder is missing.
+
 - Count a model once in the Models breakdown, however many routes served it. The four routes that carry DeepSeek V4.1 Flash each record a different model string, so the table used to show one entry per route with two of them reading identically. A row now answers one question, with the split by route and the string each route recorded in its detail, and prices are unchanged: each route's tokens are priced at that route's own rates before they are added up.
 - Follow that grouping when a model is selected, so choosing the row, or asking a report for any of the spellings it covers, shows the whole model rather than one route's share. Pricing coverage still names the route and the exact recorded string, which is what identifies a rate table that has not caught up.
 - ClinePass usage: the plan's three windows, a rolling five hours, the calendar week, and the calendar month, read from an API key you supply, each with the reset time the endpoint publishes, so these meters carry a countdown. Add the key under **Settings**, or export `CLINE_API_KEY`, or drop it in `~/.config/omarchy/ai-usage/clinepass.key`.
