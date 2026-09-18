@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "community.ai-usage-dashboard",
   "name": "AI Usage Dashboard",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": "Tyler South",
   "license": "MIT",
-  "description": "Local token history, provider comparisons, Ollama Cloud and CommandCode usage, and estimated API value.",
+  "description": "Local token history, provider comparisons, Ollama Cloud, CommandCode and ClinePass usage, and estimated API value.",
   "kinds": [
     "bar-widget"
   ],
@@ -15,7 +15,7 @@
   },
   "barWidget": {
     "displayName": "AI Usage Dashboard",
-    "description": "Local token history, provider comparisons, Ollama Cloud usage, and estimated API value.",
+    "description": "Local token history, provider comparisons, Ollama Cloud, CommandCode and ClinePass usage, and estimated API value.",
     "category": "AI",
     "aliases": [
       "agents",
@@ -55,6 +55,9 @@
           "enabled": true
         },
         "commandcode": {
+          "enabled": true
+        },
+        "clinepass": {
           "enabled": true
         }
       },

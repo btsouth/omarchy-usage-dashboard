@@ -33,6 +33,7 @@ class InstallationTests(unittest.TestCase):
             self.assertTrue((runtime/'muse-pricing.json').exists())
             self.assertTrue((runtime/'codex-pricing.json').exists())
             self.assertTrue((runtime/'ollama-pricing.json').exists())
+            self.assertTrue((runtime/'clinepass-pricing.json').exists())
             run('--with-plugin');self.assertEqual(before,registry.read_bytes())
             launcher=home/'.local/bin'/APP
             self.assertEqual(shlex.split(launcher.read_text().splitlines()[1])[1],str(runtime/"launch.sh"))

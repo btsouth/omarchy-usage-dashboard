@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- ClinePass usage: the plan's three windows, a rolling five hours, the calendar week, and the calendar month, read from an API key you supply, each with the reset time the endpoint publishes, so these meters carry a countdown. Add the key under **Settings**, or export `CLINE_API_KEY`, or drop it in `~/.config/omarchy/ai-usage/clinepass.key`.
+- Count ClinePass token history through the same agent ledger as the other routes Hermes bills, since the subscription keeps no local history of its own.
+- ClinePass reference rates, transcribed from the rates its own documentation publishes for a flat-rate subscription, with the published peak window for the DeepSeek models and DeepSeek's Flash rate for `cline-pass/deepseek-v4.1-flash`, which Cline's own model table omits.
+
 - Fix saving preferences: the save waited for its input stream to close, which never happens when the dashboard hands the payload over, so the first click left the button disabled for the rest of the window's life and wrote nothing. The save now finishes as soon as the payload arrives, it still reads a payload a scripted caller writes a moment later, a save that receives no payload reports the failure instead of closing the window as if it had worked, and a save that never returns is asked to stop after fifteen seconds and then killed, so the button cannot stay dead.
 - Refuse a price or an opacity that is not a number with a fixed sentence instead of repeating the value, so a key pasted into the wrong field cannot come back in the message the window shows, and answer a payload that is not a JSON object with that same channel instead of a traceback.
 

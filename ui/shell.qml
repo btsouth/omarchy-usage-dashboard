@@ -59,6 +59,7 @@ Scope {
     // an untouched field means "keep what is stored" rather than an edit.
     property string draftOllamaKey: ""
     property string draftCommandCodeKey: ""
+    property string draftClinePassKey: ""
     property string saveError: ""
     property var homeOptions: [
         {key:"codexHomes",name:"Codex homes",example:"/mnt/other-computer/.codex"},
@@ -86,7 +87,7 @@ Scope {
             gemini: palette.bright_magenta || "#c6a0d5", opencode: palette.bright_green || "#a7c080",
             pi: palette.bright_white || palette.bright_foreground || "#d4d4d4", omp: palette.red || "#d88b68",
             muse: palette.blue || "#7aa2f7", "ollama-cloud": palette.orange || "#a2734b",
-            "commandcode": palette.bright_green || "#a7c080"})[id] || root.ink
+            "commandcode": palette.bright_green || "#a7c080", "clinepass": palette.cyan || "#2dd5b7"})[id] || root.ink
         var color=Qt.darker(raw,1), background=luminance(root.base)
         for (var i=0;i<16;i++) {
             var value=luminance(color)
@@ -149,6 +150,7 @@ Scope {
         draftLedgerDeviceId = s.ledgerDeviceId || ""
         draftOllamaKey = s.ollamaApiKey || ""
         draftCommandCodeKey = s.commandcodeApiKey || ""
+        draftClinePassKey = s.clinepassApiKey || ""
         var prices = {}, homes = {}
         providerOptions.forEach(p => prices[p.id] = s.monthlyPrices && s.monthlyPrices[p.id] !== undefined ? String(s.monthlyPrices[p.id]) : "")
         draftAccounts.forEach(a => prices[a.id] = s.monthlyPrices && s.monthlyPrices[a.id] !== undefined ? String(s.monthlyPrices[a.id]) : "")
@@ -168,7 +170,7 @@ Scope {
             prices[p] = n
         }
         saveError = ""
-        var s = {accounts: draftAccounts, localAccountLabel: draftLocalLabel, enabled: draftEnabled, monthlyPrices: prices, windowOpacity: opacitySlider.value,
+        var s = {accounts: draftAccounts, localAccountLabel: draftLocalLabel, enabled: draftEnabled, monthlyPrices: prices, windowOpacity: opacitySlider.value, clinepassApiKey: draftClinePassKey,
                  ledgerSyncDir: draftLedgerSyncDir, ledgerDeviceId: draftLedgerDeviceId, ollamaApiKey: draftOllamaKey, commandcodeApiKey: draftCommandCodeKey}
         homeOptions.forEach(h => s[h.key] = (draftHomes[h.key] || "").split("\n").filter(x => x.trim()).map(x => x.trim()))
         save.command = ["python3", helper, "settings", "--save"]
@@ -896,13 +898,16 @@ Scope {
                         }
                     }
                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Prices on a provider apply to the local history group; prices on a labelled account apply only to that account." }
-                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Quota sources: Grok and Muse read their existing logins; Ollama Cloud reads a key here, from OLLAMA_API_KEY, or from ~/.config/omarchy/ai-usage/ollama.key. The dashboard never changes credentials and sends a key only to the provider it belongs to." }
+                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Quota sources: Grok and Muse read their existing logins; Ollama Cloud, CommandCode, and ClinePass read a key here, an environment variable, or a key file under ~/.config/omarchy/ai-usage. The dashboard never changes credentials and sends a key only to the provider it belongs to." }
                     Label { text: "Ollama Cloud API key"; font.pixelSize: 16 }
                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Optional. Only needed to show Ollama Cloud usage limits; local token history works without it. Leave blank to use the environment or the key file." }
                     Field { width: 420; text: root.draftOllamaKey; placeholderText: "Not set"; echoMode: TextInput.Password; onTextEdited: root.draftOllamaKey = text; Accessible.name: "Ollama Cloud API key" }
                     Label { text: "CommandCode API key"; font.pixelSize: 16 }
                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Optional. Only needed to show CommandCode plan usage; token history comes from Hermes and works without it. Leave blank to use the environment or ~/.config/omarchy/ai-usage/commandcode.key." }
                     Field { width: 420; text: root.draftCommandCodeKey; placeholderText: "Not set"; echoMode: TextInput.Password; onTextEdited: root.draftCommandCodeKey = text; Accessible.name: "CommandCode API key" }
+                    Label { text: "ClinePass API key"; font.pixelSize: 16 }
+                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Optional. Only needed to show ClinePass plan usage; token history comes from Hermes and works without it. Leave blank to use CLINE_API_KEY or ~/.config/omarchy/ai-usage/clinepass.key." }
+                    Field { width: 420; text: root.draftClinePassKey; placeholderText: "Not set"; echoMode: TextInput.Password; onTextEdited: root.draftClinePassKey = text; Accessible.name: "ClinePass API key" }
                     Label { text: "History accounts"; font.pixelSize: 16 }
                     Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Label agent home folders by account. Keep mirrored folders under the same account. Labels do not switch logins; quota is only for the current login on this PC." }
                     Field { width: 260; text: root.draftLocalLabel; placeholderText: "Local account name"; onTextEdited: root.draftLocalLabel = text; Accessible.name: "Local account name" }

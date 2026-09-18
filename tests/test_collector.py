@@ -1044,6 +1044,140 @@ class CollectorTests(unittest.TestCase):
         self.assertNotIn('sk-secret-cc-value', json.dumps(result))
         self.assertIn('unavailable', result['error'])
 
+    def clinepass_urlopen(self, payloads):
+        import io
+        def fake(request, timeout=12):
+            assert request.full_url.startswith('https://api.cline.bot/api/v1/'), request.full_url
+            assert request.get_header('Authorization') == 'Bearer test-clinepass-key', request.get_header('Authorization')
+            path = request.full_url.split('api.cline.bot', 1)[1]
+            return io.BytesIO(json.dumps(payloads[path]).encode())
+        return fake
+
+    def clinepass_env(self):
+        # A real CLINE_API_KEY, settings file, or key file on this machine would
+        # otherwise decide the test's outcome, so every source points inside the
+        # fixture.
+        return {'CLINE_API_KEY': 'test-clinepass-key', 'XDG_CONFIG_HOME': str(self.root / 'config'),
+                'XDG_DATA_HOME': str(self.root / 'data')}
+
+    def test_clinepass_quota_reads_percent_windows_and_nanosecond_resets(self):
+        # The endpoint wraps everything under "data", names its windows in
+        # snake_case, reports a 0-100 percentage per window, and gives reset
+        # times precise to the nanosecond.
+        payloads = {
+            '/api/v1/users/me/plan/usage-limits': {'data': {'limits': [
+                {'type': 'five_hour', 'percentUsed': 12.5, 'resetsAt': '2026-09-18T09:06:34.503758991Z'},
+                {'type': 'weekly', 'percentUsed': 0, 'resetsAt': '2026-09-25T04:06:34.506428852Z'},
+                {'type': 'monthly', 'percentUsed': 3, 'resetsAt': '2026-10-18T04:06:34.509368183Z'}]},
+                'success': True},
+            '/api/v1/users/me/plan': {'data': {'plan': {'displayName': 'Cline Pass (Monthly)'}}, 'success': True}}
+        with patch.dict('os.environ', self.clinepass_env()), \
+             patch.object(c.urllib.request, 'urlopen', side_effect=self.clinepass_urlopen(payloads)):
+            quota = c.clinepass_quota(True)
+            # The card reads the same file back through the quota dispatcher,
+            # plan name included.
+            self.assertEqual(c.quota('clinepass')['plan'], 'Cline Pass (Monthly)')
+        self.assertEqual(quota['error'], '')
+        self.assertEqual([w['label'] for w in quota['limits']], ['5 hours', 'Weekly', 'Monthly'])
+        by_label = {w['label']: w for w in quota['limits']}
+        # percentUsed is a 0-100 percentage; the cache holds the 0-1 fraction
+        # every other provider writes and other local tools read.
+        self.assertAlmostEqual(by_label['5 hours']['percent'], 0.125, places=6)
+        self.assertAlmostEqual(by_label['Monthly']['percent'], 0.03, places=6)
+        # The reset keeps its instant, in the ISO shape the panel's countdown
+        # reads, and the nanosecond precision survives the round trip.
+        self.assertTrue(by_label['5 hours']['resetsAt'].startswith('2026-09-18T09:06:34'), by_label['5 hours']['resetsAt'])
+        self.assertTrue(by_label['Monthly']['resetsAt'].startswith('2026-10-18T04:06:34'), by_label['Monthly']['resetsAt'])
+
+    def test_clinepass_keeps_a_window_it_has_not_seen_before(self):
+        # A plan tier that reports a fourth window must not lose a meter, and a
+        # row with no usable percentage is dropped rather than shown as zero.
+        payloads = {'/api/v1/users/me/plan/usage-limits': {'data': {'limits': [
+            {'type': 'daily', 'percentUsed': 1, 'resetsAt': ''},
+            {'type': 'five_hour', 'percentUsed': None, 'resetsAt': ''},
+            {'type': 'monthly', 'percentUsed': 240, 'resetsAt': ''}]}, 'success': True},
+            '/api/v1/users/me/plan': {'data': {'plan': {'displayName': 'Cline Pass (Monthly)'}}}}
+        with patch.dict('os.environ', self.clinepass_env()), \
+             patch.object(c.urllib.request, 'urlopen', side_effect=self.clinepass_urlopen(payloads)):
+            quota = c.clinepass_quota(True)
+        self.assertEqual([w['label'] for w in quota['limits']], ['Daily', 'Monthly'])
+        self.assertEqual(quota['limits'][0]['percent'], 0.01)
+        # An over-quota window clamps for the meter but keeps the real figure,
+        # so a saturated bar is not read as exactly full.
+        self.assertEqual(quota['limits'][1]['percent'], 1.0)
+        self.assertAlmostEqual(quota['limits'][1]['raw'], 2.4, places=6)
+
+    def test_clinepass_key_precedence_and_no_key_message(self):
+        config = self.root / 'config/omarchy/ai-usage'
+        config.mkdir(parents=True, exist_ok=True)
+        with patch.dict('os.environ', {'CLINE_API_KEY': '', 'XDG_CONFIG_HOME': str(self.root / 'config'),
+                                       'XDG_DATA_HOME': str(self.root / 'data')}), \
+             patch.object(c.urllib.request, 'urlopen') as request:
+            c.atomic_json(c.CONFIG, c.DEFAULTS)
+            quota = c.clinepass_quota(True)
+            self.assertIn('Settings', quota['error'])
+            request.assert_not_called()
+            (config / 'clinepass.key').write_text('file-key\n')
+            self.assertEqual(c.clinepass_key(), 'file-key')
+            with patch.dict('os.environ', {'CLINE_API_KEY': 'env-key'}): self.assertEqual(c.clinepass_key(), 'env-key')
+            self.assertEqual(c.clinepass_key(c.DEFAULTS | {'clinepassApiKey': 'typed-key'}), 'typed-key')
+
+    def test_clinepass_quota_errors_do_not_expose_the_key(self):
+        import io
+        def failing(request, timeout=12):
+            raise c.urllib.error.HTTPError(request.full_url, 401, 'Unauthorized', {},
+                                           io.BytesIO(b'bad test-clinepass-key'))
+        with patch.dict('os.environ', self.clinepass_env()), \
+             patch.object(c.urllib.request, 'urlopen', side_effect=failing):
+            quota = c.clinepass_quota(True)
+        self.assertNotIn('test-clinepass-key', json.dumps(quota))
+        self.assertIn('unavailable', quota['error'])
+        # The response body never reaches the cache either.
+        self.assertNotIn('test-clinepass-key', (c.STATE / 'clinepass-quota.json').read_text())
+
+    def test_clinepass_refuses_an_unsuccessful_envelope(self):
+        # Errors arrive as {"error": ..., "success": false}; the body must not
+        # be quoted back at the user.
+        payloads = {'/api/v1/users/me/plan/usage-limits': {'error': 'invalid api key test-clinepass-key', 'success': False}}
+        with patch.dict('os.environ', self.clinepass_env()), \
+             patch.object(c.urllib.request, 'urlopen', side_effect=self.clinepass_urlopen(payloads)):
+            quota = c.clinepass_quota(True)
+        self.assertIn('unavailable', quota['error'])
+        self.assertNotIn('test-clinepass-key', json.dumps(quota))
+
+    def test_clinepass_prices_only_its_own_route(self):
+        rates = c.load_rates()['document']
+        self.assertIn('clinepass/cline-pass/deepseek-v4.1-flash', rates)
+        # The vendor prefix is part of the model id, so no bare name is stored.
+        self.assertNotIn('cline-pass/deepseek-v4.1-flash', rates)
+        # 01:30 UTC on a Saturday is outside the published peak window.
+        off_peak = dt.datetime(2026, 9, 19, 1, 30, tzinfo=dt.timezone.utc).timestamp()
+        row = c.record('a', 'clinepass', 's', off_peak, 'cline-pass/deepseek-v4.1-flash', '/p', 'Hermes', input=1_000_000)
+        row['apiProvider'] = 'clinepass'
+        value, _ = c.price(row, rates)
+        self.assertAlmostEqual(value, 0.22, places=6)
+        # The same model name on another route keeps that route's rate.
+        other = c.record('b', 'ollama-cloud', 's', off_peak, 'deepseek-v4.1-flash', '/p', 'Hermes', input=1_000_000)
+        other['apiProvider'] = 'ollama-cloud'
+        other_value, _ = c.price(other, rates)
+        self.assertAlmostEqual(other_value, 0.15, places=6)
+        # A ClinePass row that lost the vendor prefix is unpriced rather than
+        # silently priced at another route's rate or at zero.
+        prefixless, _ = c.price(dict(row, model='deepseek-v4.1-flash'), rates)
+        self.assertIsNone(prefixless)
+
+    def test_clinepass_pricing_charges_the_peak_window(self):
+        rates = c.load_rates()['document']
+        row = c.record('a', 'clinepass', 's', 0, 'cline-pass/deepseek-v4.1-flash', '/p', 'Hermes', input=1_000_000)
+        row['apiProvider'] = 'clinepass'
+        for moment, expected in ((dt.datetime(2026, 9, 21, 0, 59, tzinfo=dt.timezone.utc), 0.22),
+                                 (dt.datetime(2026, 9, 21, 1, 0, tzinfo=dt.timezone.utc), 0.44),
+                                 (dt.datetime(2026, 9, 21, 4, 0, tzinfo=dt.timezone.utc), 0.22),
+                                 (dt.datetime(2026, 9, 21, 9, 59, tzinfo=dt.timezone.utc), 0.44),
+                                 (dt.datetime(2026, 9, 21, 10, 0, tzinfo=dt.timezone.utc), 0.22)):
+            value, _ = c.price(dict(row, ts=moment.timestamp()), rates)
+            self.assertAlmostEqual(value, expected, places=6, msg=moment.isoformat())
+
     def test_settings_accepts_a_stdin_payload_and_masks_the_reply(self):
         # The UI sends the payload on stdin so a key never reaches argv.
         env = dict(os.environ, XDG_CONFIG_HOME=str(self.root / 'config'), XDG_STATE_HOME=str(self.root / 'state'))

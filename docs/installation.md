@@ -23,6 +23,7 @@ The installer runs without sudo. It checks all tracked destinations before chang
 | Preferences | `~/.config/omarchy/ai-usage/settings.json` |
 | Optional Ollama Cloud API key | `~/.config/omarchy/ai-usage/ollama.key` |
 | Optional CommandCode API key | `~/.config/omarchy/ai-usage/commandcode.key` |
+| Optional ClinePass API key | `~/.config/omarchy/ai-usage/clinepass.key` |
 
 XDG config, data, and state paths are respected. The launchers remain under `~/.local/bin`, which should be on PATH. Set custom source-home variables such as CODEX_HOME consistently for your shell and systemd user manager if you use them.
 
@@ -30,6 +31,6 @@ XDG config, data, and state paths are respected. The launchers remain under `~/.
 
 `--no-systemd` writes files without enabling, stopping, or reloading services. It is intended for staged installs and automated tests. Enable the installed timer manually when staging is complete.
 
-Omarchy's native collectors maintain Codex/Claude quota snapshots. If those are unavailable, local token history still works and the UI shows missing quota information. Existing OpenCode Go credentials are read only to request quota from OpenCode's service. Ollama Cloud reads a key you supply, from `~/.config/omarchy/ai-usage/ollama.key`, the `OLLAMA_API_KEY` environment variable, or the Settings field; it is never written back or refreshed, and it stays out of any report the dashboard renders. CommandCode does the same, from `~/.config/omarchy/ai-usage/commandcode.key`, `COMMANDCODE_API_KEY`, or the Settings field.
+Omarchy's native collectors maintain Codex/Claude quota snapshots. If those are unavailable, local token history still works and the UI shows missing quota information. Existing OpenCode Go credentials are read only to request quota from OpenCode's service. Ollama Cloud reads a key you supply, from `~/.config/omarchy/ai-usage/ollama.key`, the `OLLAMA_API_KEY` environment variable, or the Settings field; it is never written back or refreshed, and it stays out of any report the dashboard renders. CommandCode does the same, from `~/.config/omarchy/ai-usage/commandcode.key`, `COMMANDCODE_API_KEY`, or the Settings field. ClinePass does the same, from `~/.config/omarchy/ai-usage/clinepass.key`, `CLINE_API_KEY`, or the Settings field.
 
 Grok quota uses the existing CLI access token without refreshing credentials. Manual Refresh bypasses quota caches; a changed Grok login also invalidates its previous cache. Pi, Oh My Pi, and general OpenCode histories do not supply a shared account quota. Gemini can display an existing Omarchy quota snapshot, but this package does not exchange Gemini OAuth credentials.
