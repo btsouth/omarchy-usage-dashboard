@@ -22,6 +22,14 @@ OpenCode Go, Ollama Cloud, CommandCode, and ClinePass are the routes Hermes also
 
 Hermes stores no dollar estimate for these routes, so its rows price from the catalog exactly as OpenCode Go rows do, and stay marked unpriced where no rate exists.
 
+## One row per model
+
+The Models breakdown answers one question per model, so a model reached over several routes is one row and carries its split by route. Each route records the model string its own API returns: OpenCode Go and Ollama Cloud record a bare name, while CommandCode and ClinePass prefix it with the vendor's id. Those spellings are the same model, and the dashboard now counts them together and shows the recorded spelling per route in the row's detail. A single-route row that was grouped under one name still shows the spelling it was recorded under.
+
+The grouping is an explicit list of model strings, never a rule that strips a prefix, so a model whose name merely looks similar is not folded in with another. Value is unaffected by grouping: every record is priced by its own route's rate table first, and the grouped row adds those figures up, so it shows the real total rather than one route's rates applied to another route's traffic. Pricing coverage is deliberately not grouped: it names the route and the exact recorded spelling, because that pair identifies the rate table that has not caught up.
+
+A model selection follows the same grouping. Choosing a grouped row, or invoking `report --model` with any of the spellings it covers, selects the whole model rather than one route's share of it, and the per-card model rows respect exactly that selection. The other breakdowns (routes, projects, clients, sessions, accounts) stay per route, because a route is what they describe.
+
 Gemini records identify projects by hash, so the dashboard labels them as Gemini project IDs. It does not guess the original filesystem path. Deleted or rewound conversation content does not refund tokens: already recorded usage stays in the metric ledger. Ephemeral sessions and calls that never write usage cannot be recovered.
 
 ## Limits and pricing

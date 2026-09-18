@@ -908,6 +908,87 @@ class CollectorTests(unittest.TestCase):
         self.assertGreater(card['models'][0]['value'], 0)
         ledger.db.close()
 
+    def model_family_ledger(self):
+        """One model recorded the way four routes each name it, plus a second
+        model that must stay its own row."""
+        ledger = c.Ledger(self.root / 'families.sqlite')
+        self.addCleanup(ledger.db.close)
+        when = 1789000000
+        families = {'opencode-go': 'deepseek-v4.1-flash', 'ollama-cloud': 'deepseek-v4.1-flash',
+                    'commandcode': 'deepseek/deepseek-v4.1-flash', 'clinepass': 'cline-pass/deepseek-v4.1-flash'}
+        for provider, model in families.items():
+            ledger.put(c.record(provider, provider, provider + '-session', when, model, '/p', 'Hermes',
+                                input=1000, output=100, cacheRead=5000))
+        ledger.put(c.record('glm', 'ollama-cloud', 'ollama-session', when, 'glm-5.2', '/p', 'Hermes', input=1000, output=100))
+        return ledger, families
+
+    def test_models_breakdown_counts_one_model_across_routes(self):
+        # Four routes record the same model under the string their own API
+        # returns. "How much went through this model" is one answer, so the
+        # Models table is one row that still carries the split by route.
+        ledger, families = self.model_family_ledger()
+        cfg = c.DEFAULTS | {'enabled': list(families) + ['ollama-cloud']}
+        now = dt.datetime(2026, 9, 16, 12).astimezone()
+        with patch.object(c, 'quota', return_value={'limits': []}), \
+             patch.object(c, 'account_quotas', return_value=({}, {})), patch.object(c, 'theme', return_value={}):
+            data = c.report(ledger, cfg, days=365, now=now)
+            scoped = [c.report(ledger, cfg, days=365, provider=p, now=now) for p in families]
+        merged = next(row for row in data['models'] if row['name'] == 'deepseek-v4.1-flash')
+        self.assertEqual([row['name'] for row in data['models']], ['deepseek-v4.1-flash', 'glm-5.2'])
+        self.assertEqual(merged['tokens'], 4 * 6100)
+        # Each route reports the string it recorded, with its own figure.
+        self.assertEqual({route['provider']: route['model'] for route in merged['routes']}, families)
+        self.assertEqual([route['tokens'] for route in merged['routes']], [6100] * 4)
+        self.assertEqual([route['sessions'] for route in merged['routes']], [1] * 4)
+        # Grouping must not re-price anything. The grouped value is what each
+        # route charged its own tokens at, so it equals the sum of the four
+        # route-scoped reports, and it is not one route's rates applied to all
+        # of the traffic (ClinePass bills this model at its own table).
+        per_route = [next(row for row in scoped_report['models'] if row['name'] == 'deepseek-v4.1-flash')['value']
+                     for scoped_report in scoped]
+        self.assertAlmostEqual(merged['value'], sum(per_route), places=9)
+        self.assertNotAlmostEqual(merged['value'], 4 * per_route[0], places=6)
+        self.assertEqual(data['models'][0]['provider'], 'opencode-go')
+
+    def test_a_model_selection_matches_every_route_spelling(self):
+        ledger, families = self.model_family_ledger()
+        cfg = c.DEFAULTS | {'enabled': list(families)}
+        now = dt.datetime(2026, 9, 16, 12).astimezone()
+        with patch.object(c, 'quota', return_value={'limits': []}), \
+             patch.object(c, 'account_quotas', return_value=({}, {})), patch.object(c, 'theme', return_value={}):
+            by_name = c.report(ledger, cfg, days=365, now=now, selection={'model': 'deepseek-v4.1-flash'})
+            by_spelling = c.report(ledger, cfg, days=365, now=now, selection={'model': 'cline-pass/deepseek-v4.1-flash'})
+            sibling = c.report(ledger, cfg, days=365, now=now, selection={'model': 'deepseek-v4-flash'})
+        self.assertEqual(by_name['summary']['tokens'], 4 * 6100)
+        self.assertEqual(by_spelling['summary']['tokens'], by_name['summary']['tokens'])
+        # A family is not a prefix match: the neighbouring model is a different
+        # model, and a name nothing recorded selects nothing.
+        self.assertEqual(sibling['summary']['tokens'], 0)
+        # The per-card model rows read the same selection, so a filtered view
+        # cannot show a populated table beside a card with no models.
+        card = next(card for card in by_name['cards'] if card['provider'] == 'clinepass')
+        self.assertEqual([row['model'] for row in card['models']], ['cline-pass/deepseek-v4.1-flash'])
+
+    def test_unpriced_coverage_stays_per_route_and_spelling(self):
+        # The table groups one model's spellings, but pricing coverage names the
+        # route and the exact string, because that pair identifies the rate table
+        # that has not caught up.
+        ledger = c.Ledger(self.root / 'unpriced.sqlite')
+        self.addCleanup(ledger.db.close)
+        for provider in ('opencode-go', 'ollama-cloud'):
+            ledger.put(c.record(provider, provider, provider + '-session', 1789000000, 'mystery-model', '/p', 'Hermes',
+                                input=1000, output=100))
+        cfg = c.DEFAULTS | {'enabled': ['opencode-go', 'ollama-cloud']}
+        with patch.object(c, 'quota', return_value={'limits': []}), \
+             patch.object(c, 'account_quotas', return_value=({}, {})), patch.object(c, 'theme', return_value={}):
+            data = c.report(ledger, cfg, days=365, now=dt.datetime(2026, 9, 16, 12).astimezone())
+        self.assertEqual([row['provider'] for row in data['pricing']['unpriced']], ['opencode-go', 'ollama-cloud'])
+        self.assertEqual({row['name'] for row in data['pricing']['unpriced']}, {'mystery-model'})
+        self.assertEqual([row['unpricedTokens'] for row in data['pricing']['unpriced']], [1100, 1100])
+        # The table still answers the grouped question.
+        self.assertEqual([(row['name'], row['tokens']) for row in data['models']], [('mystery-model', 2200)])
+        self.assertEqual(data['unknownModels'], ['mystery-model'])
+
     def test_ollama_key_precedence_and_no_key_message(self):
         config = self.root / 'config/omarchy/ai-usage'
         config.mkdir(parents=True, exist_ok=True)

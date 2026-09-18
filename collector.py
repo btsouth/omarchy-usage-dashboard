@@ -44,6 +44,21 @@ HERMES_TASKS = {'': 'conversation', 'title_generation': 'title generation', 'bac
 # Ollama Cloud reports quota as a fraction of each plan window. Legacy plans
 # have session and weekly windows; credit plans have a monthly one.
 OLLAMA_WINDOWS = {'session': 'Session (5-hour)', 'weekly': 'Weekly (7-day)', 'monthly': 'Monthly'}
+# One model can be reached over several routes, and each route writes the model
+# string its own API returns: OpenCode Go and Ollama Cloud record a bare name,
+# while CommandCode and ClinePass prefix it with the vendor's id. Those are the
+# same model, so the Models breakdown groups them and shows the split by route.
+# Identical strings need no entry below; a vendor-prefixed spelling does, and
+# every mapping is listed rather than inferred by stripping a prefix, because a
+# prefix rule would also merge model families that only look alike.
+MODEL_FAMILIES = {'deepseek/deepseek-v4.1-flash': 'deepseek-v4.1-flash',
+                  'cline-pass/deepseek-v4.1-flash': 'deepseek-v4.1-flash'}
+
+
+def model_family(name):
+    """The model a recorded string belongs to. Anything unlisted is its own
+    family, so a new model is never folded into a family by accident."""
+    return MODEL_FAMILIES.get(name, name)
 # Stands in for a stored key in reports so the settings form can show that one
 # exists without sending it back over the report channel. Never a valid key.
 # One mask covers every provider's key field, since the form only needs to know
@@ -1326,6 +1341,23 @@ def account_assignments(ledger, cfg):
     return labels, resolved
 
 
+def selected(r, selection, provider):
+    """Whether a record survives the report's filters. One copy, because the
+    table and the per-card model rows have to agree on what a selection means:
+    two hand-maintained copies of this comparison is how a filtered view ends up
+    contradicting the table it was opened from. A model selection matches the
+    whole family, since the row a reader clicked can stand for several routes.
+    """
+    for key in ('model', 'project', 'client', 'apiProvider'):
+        if not selection.get(key): continue
+        if key == 'model':
+            if model_family(r['model']) != model_family(selection['model']): return False
+            continue
+        value = r[key] or ('Unknown project' if key == 'project' else provider if key == 'apiProvider' else '')
+        if value != selection[key]: return False
+    return True
+
+
 def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
     selection = selection or {}
     today = now or dt.datetime.now().astimezone()
@@ -1350,6 +1382,8 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
                'providers': {p: bucket() for p in providers}, 'cards': {}}
               for ts in range(int(hour_start), int(hour_end) + 1, 3600)] if days == 1 or selection.get('day') else []
     models, projects, clients, sessions, routes, accounts = {}, {}, {}, {}, {}, {}
+    model_routes = {}
+    unpriced = {}
     labels, assignments = account_assignments(ledger, cfg)
     provider_accounts = {p: set() for p in providers}
     heatmap = collections.Counter()
@@ -1363,7 +1397,7 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
         if selection.get('account') and account != selection['account']: continue
         if p not in providers or (provider != 'all' and p != provider): continue
         day = str(dt.datetime.fromtimestamp(r['ts']).date())
-        if any((r[key] or ('Unknown project' if key == 'project' else p if key == 'apiProvider' else '')) != selection[key] for key in ('model', 'project', 'client', 'apiProvider') if selection.get(key)): continue
+        if not selected(r, selection, p): continue
         if selection.get('day') and day != selection['day']: continue
         heatmap[day] += sum(r[f] for f in FIELDS[:4])
         if r['ts'] < previous_start: continue
@@ -1382,8 +1416,25 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
             if 0 <= index < len(hourly):
                 add(hourly[index]['providers'][p], r, value, savings)
                 add(hourly[index]['cards'].setdefault(card_id, bucket()), r, value, savings)
-        if value is None: unknown.add(r['model'])
-        for group, key in [(models, (p, r['model'])), (projects, (p, r['project'] or 'Unknown project')),
+        if value is None:
+            # Pricing coverage stays keyed by route and by the exact recorded
+            # spelling, because that pair is what names the rate table that has
+            # not caught up. Grouping it under one model name would blame the
+            # wrong route for an unpriced token.
+            unknown.add(r['model'])
+            add(unpriced.setdefault((p, r['model']), bucket()), r, value, savings)
+        # The Models breakdown is keyed by family rather than by provider, so one
+        # model is one row across routes, and it keeps its own per-route detail.
+        # Every route's value is still priced by that route's own rate table in
+        # price() above, so grouping sums real figures instead of re-pricing one
+        # route's tokens at another route's rates.
+        family = model_family(r['model'])
+        add(models.setdefault(family, bucket()), r, value, savings)
+        route = model_routes.setdefault(family, {}).setdefault(p, {'models': set(), 'bucket': bucket()})
+        route['models'].add(r['model'])
+        add(route['bucket'], r, value, savings)
+        # Every other breakdown stays keyed by provider, as it always was.
+        for group, key in [(projects, (p, r['project'] or 'Unknown project')),
                            (clients, (p, r['client'])), (sessions, (p, r['session'])),
                            (routes, (p, r.get('apiProvider') or p)), (accounts, (p, account))]:
             b = group.setdefault(key, bucket())
@@ -1468,8 +1519,7 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
                 'SELECT * FROM events WHERE provider=? AND ts>=? AND ts<=?', (card['provider'], start, end)):
             r = dict(row)
             if assignments.get(r['id'], 'unassigned') != card['accountId']: continue
-            if any((r[key] or ('Unknown project' if key == 'project' else card['provider'] if key == 'apiProvider' else '')) != selection[key]
-                   for key in ('model', 'project', 'client', 'apiProvider') if selection.get(key)): continue
+            if not selected(r, selection, card['provider']): continue
             if selection.get('day') and str(dt.datetime.fromtimestamp(r['ts']).date()) != selection['day']: continue
             value = price(r, rates['document'])[0]
             entry = rows_for_card.setdefault(r['model'], {'model': r['model'], 'tokens': 0, 'value': 0.0, 'unpriced': 0})
@@ -1479,6 +1529,23 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
             else: entry['value'] += value
         card_models[card['id']] = sorted(rows_for_card.values(), key=lambda item: item['tokens'], reverse=True)[:4]
     for card in cards: card['models'] = card_models.get(card['id'], [])
+    # The Models table: one row per model, carrying the routes that served it.
+    # A grouped row's value is the sum of what each route charged its own tokens
+    # at, so it is the real total and not one route's rates applied to another's
+    # traffic. `provider` stays the route that carried most of it, which is what
+    # the row's colour dot and a single-route drill both follow.
+    model_rows = []
+    for name, b in models.items():
+        route_rows = []
+        for p, route in model_routes.get(name, {}).items():
+            done = finish(route['bucket'])
+            route_rows.append({'provider': p, 'providerName': PROVIDERS.get(p, p),
+                               'model': ', '.join(sorted(route['models'])),
+                               'tokens': done['tokens'], 'value': done['value'],
+                               'unpricedTokens': done['unpricedTokens'], 'sessions': done['sessions']})
+        route_rows.sort(key=lambda item: item['tokens'], reverse=True)
+        model_rows.append(finish(b) | {'name': name, 'provider': route_rows[0]['provider'] if route_rows else '', 'routes': route_rows})
+    model_rows.sort(key=lambda x: x['tokens'], reverse=True)
     return {'selection': selection, 'generatedAt': time.time(), 'period': {'days': days, 'start': str(start_date), 'end': str(today.date())},
             'accountOptions': account_options,
             'accounts': [r | {'accountId': r['name'], 'name': labels[r['name']]} for r in rows(accounts)],
@@ -1494,11 +1561,11 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
                        'cards': {card_id: finish(b) for card_id, b in values['cards'].items()}} for day, values in daily.items()],
             'hourly': [h | {'providers': {p: finish(b) for p, b in h['providers'].items()},
                             'cards': {card_id: finish(b) for card_id, b in h['cards'].items()}} for h in hourly],
-            'routes': rows(routes), 'models': rows(models), 'projects': rows(projects), 'clients': rows(clients), 'sessions': rows(sessions),
+            'routes': rows(routes), 'models': model_rows, 'projects': rows(projects), 'clients': rows(clients), 'sessions': rows(sessions),
             'heatmap': dict(heatmap), 'unknownModels': sorted(unknown), 'coverage': coverage | {'earliest': earliest},
             'pricing': {'source': rates['source'], 'fetchedAtMs': rates.get('fetchedAtMs'),
                         'coveragePercent': 100 * (1 - summary['unpricedTokens']/summary['tokens']) if summary['tokens'] else None,
-                        'unpriced': [r for r in rows(models) if r['unpricedTokens']]},
+                        'unpriced': rows(unpriced)},
             # Reports reach the bar panel and the dashboard window. The key
             # comes back masked so the settings form can show that one is
             # stored without echoing it.

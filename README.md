@@ -93,6 +93,7 @@ Account labels group history, not credentials. **All accounts** shows the curren
 - **Processed tokens** count reused context on every request. They are not a count of unique text.
 - **API value** uses recorded estimates or catalog prices. OpenCode Go follows the documented model rates, including peak-hour doubling for DeepSeek and the per-model monthly allowances shown on the Go card. Ollama Cloud and CommandCode follow their own published rates, each including that provider's peak window for the DeepSeek models. ClinePass follows the reference rates its own documentation publishes for a flat-rate subscription. It is not your subscription bill. Missing prices stay marked as unpriced.
 - **Per-session averages** cover recorded activity in the selected period. A session is not a completed task or a model-efficiency benchmark.
+- **Models** are counted once per model across the routes that served it, so a model reached through more than one provider is a single row. Its detail shows the split by route and the model string each route recorded. Prices are unaffected: every route's tokens are priced at that route's own rates and then added up.
 
 History refreshes every 15 minutes, along with OpenCode Go, Ollama Cloud, CommandCode, ClinePass, and enabled Grok quota. **Refresh** also requests fresh Codex and Claude limits from Omarchy. See [pricing details](docs/pricing.md) for rates and accounting.
 

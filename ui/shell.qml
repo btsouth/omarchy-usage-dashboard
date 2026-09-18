@@ -111,6 +111,24 @@ Scope {
     function display(b) { return metric === "tokens" ? compact(b ? b.tokens : 0) : b && b.tokens > 0 && b.unpricedTokens === b.tokens ? "Unpriced" : money(b ? b.value : 0) }
     function amount(b) { return b ? (metric === "tokens" ? b.tokens : b.value) : 0 }
     function valueText(b) { return b.unpricedTokens === b.tokens && b.tokens > 0 ? "Unpriced" : money(b.value) + (b.unpricedTokens ? " + unpriced" : "") }
+    function routeCount(row) {
+        // A Models row can stand for several routes. Say so, rather than letting
+        // one row read as one route's traffic.
+        return root.breakdown === "models" && row.routes ? row.routes.length : 0
+    }
+    function recordedAs(row) {
+        // Each route records the model string its own API returns, so when a row
+        // carries one spelling that is not the grouped name, keep it reachable.
+        if (root.breakdown !== "models" || !row.routes || row.routes.length !== 1) return ""
+        return row.routes[0].model !== row.name ? "Recorded as " + row.routes[0].model : ""
+    }
+    function exploreRow(row) {
+        if (root.breakdown === "sessions") return
+        var field = root.breakdown === "models" ? "model" : root.breakdown === "projects" ? "project" : root.breakdown === "routes" ? "apiProvider" : root.breakdown === "accounts" ? "account" : "client"
+        // A row that spans routes has no single route to scope the drill to, and
+        // the report matches the whole model family either way.
+        root.drill(field, root.breakdown === "accounts" ? row.accountId : row.name, root.routeCount(row) > 1 ? "" : row.provider)
+    }
     function refresh() {
         if (scan.running) { pending = true; return }
         error = ""
@@ -716,22 +734,26 @@ Scope {
                                             color: activeFocus ? root.bright : root.ink
                                             Accessible.role: Accessible.Button
                                             Accessible.name: "Explore "+modelData.name
-                                            Keys.onReturnPressed: { if (root.breakdown !== "sessions") root.drill(root.breakdown === "models" ? "model" : root.breakdown === "projects" ? "project" : root.breakdown === "routes" ? "apiProvider" : root.breakdown === "accounts" ? "account" : "client", root.breakdown === "accounts" ? modelData.accountId : modelData.name, modelData.provider) }
+                                            Keys.onReturnPressed: root.exploreRow(modelData)
                                             text: root.breakdown === "sessions" ? (modelData.project.split("/").filter(x=>x).pop() || "/")+" · "+modelData.name.slice(0,12)+"\n"+modelData.client+" · "+root.when(modelData.lastAt) : root.breakdown === "projects" ? modelData.name.split('/').filter(x=>x).pop() || "/" : modelData.name
                                             HoverTip {
                                                 parent: modelLabel
                                                 visible: rowHover.hovered
                                                 y: parent.height+10
                                                 heading: root.breakdown === "sessions" ? modelData.project+"\n"+modelData.name : modelData.name
-                                                detail: modelData.sessions+" sessions · "+root.compact(modelData.requests)+" usage records"
-                                                rows: [{label:"Uncached input",value:root.compact(modelData.input)},
+                                                detail: modelData.sessions+" sessions · "+root.compact(modelData.requests)+" usage records"+(root.recordedAs(modelData) ? " · "+root.recordedAs(modelData) : "")
+                                                rows: (root.routeCount(modelData) > 1
+                                                       ? modelData.routes.map(r => ({label: r.providerName+" · "+r.model, value: root.compact(r.tokens)+" · "+root.valueText(r), color: root.colorFor(r.provider)}))
+                                                       : []).concat([
+                                                       {label:"Uncached input",value:root.compact(modelData.input)},
                                                        {label:"Cached input",value:root.compact(modelData.cacheRead)},
                                                        {label:"Cache writes",value:root.compact(modelData.cacheWrite)},
-                                                       {label:"Output",value:root.compact(modelData.output)}]
+                                                       {label:"Output",value:root.compact(modelData.output)}])
                                             }
                                             HoverHandler { id: rowHover; cursorShape: root.breakdown === "sessions" ? Qt.ArrowCursor : Qt.PointingHandCursor }
-                                            TapHandler { onTapped: { if (root.breakdown !== "sessions") root.drill(root.breakdown === "models" ? "model" : root.breakdown === "projects" ? "project" : root.breakdown === "routes" ? "apiProvider" : root.breakdown === "accounts" ? "account" : "client", root.breakdown === "accounts" ? modelData.accountId : modelData.name, modelData.provider) } }
+                                            TapHandler { onTapped: root.exploreRow(modelData) }
                                         }
+                                        Sub { visible: root.routeCount(modelData) > 1; text: root.routeCount(modelData)+" routes"; font.pixelSize: 10 }
                                         Label { text: root.compact(modelData.tokens); Layout.preferredWidth: 95; horizontalAlignment: Text.AlignRight }
                                         Label { text: root.valueText(modelData); Layout.preferredWidth: 150; horizontalAlignment: Text.AlignRight; color: modelData.unpricedTokens ? root.colorFor("claude") : root.ink }
                                         Sub { text: (modelData.tokens ? modelData.cacheRead/modelData.tokens*100 : 0).toFixed(1)+"%"; Layout.preferredWidth: 95; horizontalAlignment: Text.AlignRight }

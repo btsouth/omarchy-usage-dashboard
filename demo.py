@@ -30,7 +30,7 @@ with tempfile.TemporaryDirectory(prefix='usage-dashboard-demo-') as tmp:
     ledger=c.Ledger(c.STATE/'usage.sqlite');rng=random.Random(7);now=dt.datetime.now().astimezone()
     for offset in range(7):
         date=now.date()-dt.timedelta(days=offset)
-        for provider,model in [('codex','gpt-4.1'),('claude','claude-sonnet-4-20250514'),('opencode-go','glm-5.3-flash'),('grok','grok-demo'),('gemini','gemini-3.8-flash'),('opencode','example-model'),('pi','example-model'),('omp','example-model'),('muse','muse-spark-1.3-contributor'),('ollama-cloud','glm-5.2'),('commandcode','deepseek/deepseek-v4-pro'),('clinepass','cline-pass/deepseek-v4.1-flash')]:
+        for provider,model in [('codex','gpt-4.1'),('claude','claude-sonnet-4-20250514'),('opencode-go','glm-5.3-flash'),('grok','grok-demo'),('gemini','gemini-3.8-flash'),('opencode','example-model'),('pi','example-model'),('omp','example-model'),('muse','muse-spark-1.3-contributor'),('ollama-cloud','deepseek-v4.1-flash'),('commandcode','deepseek/deepseek-v4.1-flash'),('clinepass','cline-pass/deepseek-v4.1-flash')]:
             for index in range(rng.randint(15,50)):
                 when=dt.datetime.combine(date,dt.time()).astimezone()+dt.timedelta(minutes=index*2)
                 if when>now:continue

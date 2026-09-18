@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Count a model once in the Models breakdown, however many routes served it. The four routes that carry DeepSeek V4.1 Flash each record a different model string, so the table used to show one entry per route with two of them reading identically. A row now answers one question, with the split by route and the string each route recorded in its detail, and prices are unchanged: each route's tokens are priced at that route's own rates before they are added up.
+- Follow that grouping when a model is selected, so choosing the row, or asking a report for any of the spellings it covers, shows the whole model rather than one route's share. Pricing coverage still names the route and the exact recorded string, which is what identifies a rate table that has not caught up.
 - ClinePass usage: the plan's three windows, a rolling five hours, the calendar week, and the calendar month, read from an API key you supply, each with the reset time the endpoint publishes, so these meters carry a countdown. Add the key under **Settings**, or export `CLINE_API_KEY`, or drop it in `~/.config/omarchy/ai-usage/clinepass.key`.
 - Count ClinePass token history through the same agent ledger as the other routes Hermes bills, since the subscription keeps no local history of its own.
 - ClinePass reference rates, transcribed from the rates its own documentation publishes for a flat-rate subscription, with the published peak window for the DeepSeek models and DeepSeek's Flash rate for `cline-pass/deepseek-v4.1-flash`, which Cline's own model table omits.
