@@ -498,12 +498,16 @@ Scope {
                     RowLayout {
                         width: parent.width; spacing: 18
                         Card {
-                            Layout.preferredWidth: 320; Layout.fillHeight: true; implicitHeight: 330
+                            Layout.preferredWidth: 320; Layout.fillHeight: true
+                            // The sessions line wraps on a long history, so the card
+                            // takes its height from the column inside it.
+                            implicitHeight: metricColumn.implicitHeight + 44
                             Column {
-                                anchors.fill: parent; anchors.margins: 22; spacing: 12
+                                id: metricColumn
+                                anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 22; spacing: 12
                                 Sub { text: root.metric === "tokens" ? "PROCESSED TOKENS" : "ESTIMATED API VALUE"; font.letterSpacing: 1.2 }
                                 Label { text: root.data ? root.display(root.data.summary) : "…"; font.pixelSize: 36; font.weight: Font.Medium }
-                                Sub { text: root.data ? root.data.summary.sessions + " sessions · " + root.compact(root.data.summary.requests) + " usage records" + (root.metric === "value" && root.data.summary.unpricedTokens ? " · partial value" : "") : "Scanning local history" }
+                                Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.data ? root.data.summary.sessions + " sessions · " + root.compact(root.data.summary.requests) + " usage records" + (root.metric === "value" && root.data.summary.unpricedTokens ? " · partial value" : "") : "Scanning local history" }
                                 Rectangle { width: parent.width; height: 1; color: root.edge }
                                 Label {
                                     text: {
