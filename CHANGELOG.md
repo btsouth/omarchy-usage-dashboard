@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fix saving preferences: the save waited for its input stream to close, which never happens when the dashboard hands the payload over, so the first click left the button disabled for the rest of the window's life and wrote nothing. The save now finishes as soon as the payload arrives, a save that receives no payload reports the failure instead of closing the window as if it had worked, and a save that never returns is abandoned after fifteen seconds rather than leaving the button dead.
+
 ## 1.3.0 - 2026-09-17
 
 - CommandCode usage: plan windows read from an API key you supply, with the resets they publish. Its allowance is measured in credit value rather than tokens (GOAT allows $14 in any 5 hours, $35 in any 7 days, and $70 a month), and each window reports its own spend, cap, and reset time, so these meters carry a countdown where the other providers cannot. Add the key under **Settings**, or export `COMMANDCODE_API_KEY`, or drop it in `~/.config/omarchy/ai-usage/commandcode.key`.

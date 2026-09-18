@@ -199,6 +199,14 @@ Scope {
             else root.notice = root.saveError || "Settings could not be saved."
         }
     }
+    Timer {
+        // A save that never returns would leave Save preferences disabled for
+        // the life of the window, which reads as a button that does nothing.
+        // Killing it exits nonzero, so the window reports the failure and the
+        // button comes back. A local settings write has nothing to wait on.
+        running: save.running; interval: 15000
+        onTriggered: save.running = false
+    }
     Process {
         id: live
         command: Quickshell.env("AI_USAGE_DEMO") === "1" ? ["python3", helper, "report"] : ["bash", helper.replace(/collector\.py$/, "refresh.sh"), "--force"]

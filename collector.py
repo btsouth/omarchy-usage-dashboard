@@ -9,6 +9,7 @@ import math
 import json
 import os
 from pathlib import Path
+import select
 import socket
 import struct
 import sqlite3
@@ -98,6 +99,38 @@ def masked_settings(cfg):
     each call site, so a key added later cannot be echoed by omission."""
     return cfg | {field: (API_KEY_MASK if cfg.get(field) else '')
                   for field in ('ollamaApiKey', 'commandcodeApiKey')}
+
+
+def stdin_payload(stream=None, timeout=5.0, idle=0.25):
+    """The settings payload a client wrote to stdin, read without waiting for
+    the end of input.
+
+    A GUI client hands this process a live pipe and holds its write end open
+    for as long as the process runs, so reading to the end of file blocks the
+    save forever: no settings written, no exit, and a Save button that never
+    comes back. Stop as soon as the bytes parse as JSON, and give up after
+    `idle` seconds of silence, bounded by `timeout`, so a client that opens
+    stdin and writes nothing still returns.
+    """
+    stream = sys.stdin if stream is None else stream
+    try:
+        if stream is None or stream.isatty(): return None
+    except (AttributeError, ValueError): return None
+    deadline, chunks, wait = time.monotonic() + timeout, [], idle
+    while True:
+        wait = min(wait, deadline - time.monotonic())
+        if wait <= 0: break
+        try: ready = select.select([stream], [], [], wait)[0]
+        except (OSError, ValueError): break
+        if not ready: break
+        try: chunk = os.read(stream.fileno(), 65536)
+        except (AttributeError, OSError): break
+        if not chunk: break  # The writer closed: that is the end of the payload.
+        chunks.append(chunk)
+        try: json.loads(b''.join(chunks))
+        except (UnicodeDecodeError, ValueError): continue
+        break
+    return b''.join(chunks).decode('utf-8', 'replace').strip() or None
 
 
 def save_settings(value):
@@ -1404,8 +1437,13 @@ def main():
             # a key never has to appear in a command line. --save with a value
             # stays supported for scripted use.
             raw = args.save
-            if raw is not None and not raw.strip() and not sys.stdin.isatty():
-                raw = sys.stdin.read().strip() or None
+            if raw is not None and not raw.strip():
+                raw = stdin_payload()
+                if raw is None:
+                    # Nothing to write. Reporting the settings and exiting 0
+                    # would close the window with "Settings saved" and save
+                    # nothing, so this is the failure case.
+                    print(json.dumps({'error': 'No settings were received to save.'})); raise SystemExit(1)
             # The settings channel is what writes the key, so it is also the
             # one place the key could leak back out through stdout. Every
             # answer masks it, as the usage reports already do.

@@ -1056,6 +1056,44 @@ class CollectorTests(unittest.TestCase):
         stored = json.loads((self.root / 'config/omarchy/ai-usage/settings.json').read_text())
         self.assertEqual(stored['ollamaApiKey'], 'stdin-key')
 
+    def settings_save(self, env):
+        child = subprocess.Popen(
+            [sys.executable, str(Path(__file__).parents[1] / 'collector.py'), 'settings', '--save'],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env, cwd=str(self.root))
+        assert child.stdin and child.stdout
+        self.addCleanup(child.kill); self.addCleanup(child.stdin.close); self.addCleanup(child.stdout.close)
+        return child
+
+    def test_settings_save_finishes_while_the_client_holds_stdin_open(self):
+        # A GUI client keeps the write end of the pipe open for as long as the
+        # collector runs, so a save that reads to the end of input never comes
+        # back: no settings written, no exit, and a Save button that stays
+        # disabled for the life of the window.
+        env = dict(os.environ, XDG_CONFIG_HOME=str(self.root / 'config'), XDG_STATE_HOME=str(self.root / 'state'))
+        child = self.settings_save(env)
+        child.stdin.write('{"monthlyPrices": {"commandcode": 20}, "enabled": ["codex"]}\n')
+        child.stdin.flush()
+        try:
+            child.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            self.fail('the save waited for end of input instead of writing the settings')
+        self.assertEqual(child.returncode, 0, child.stdout.read())
+        stored = json.loads((self.root / 'config/omarchy/ai-usage/settings.json').read_text())
+        self.assertEqual(stored['monthlyPrices'], {'commandcode': 20.0})
+
+    def test_settings_save_without_a_payload_fails_instead_of_reporting_success(self):
+        # An empty stdin used to fall through to reading the settings, which
+        # exits 0: the window closed with "Settings saved" and wrote nothing.
+        env = dict(os.environ, XDG_CONFIG_HOME=str(self.root / 'config'), XDG_STATE_HOME=str(self.root / 'state'))
+        child = self.settings_save(env)
+        try:
+            child.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            self.fail('the save waited for end of input instead of reporting the missing payload')
+        self.assertEqual(child.returncode, 1)
+        self.assertIn('error', json.loads(child.stdout.read()))
+        self.assertFalse((self.root / 'config/omarchy/ai-usage/settings.json').exists())
+
     def test_settings_channel_never_echoes_the_key(self):
         with patch.dict('os.environ', {'XDG_CONFIG_HOME': str(self.root / 'config')}):
             saved = c.save_settings(c.DEFAULTS | {'ollamaApiKey': 'typed-key'})
