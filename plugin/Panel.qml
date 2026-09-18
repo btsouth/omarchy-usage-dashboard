@@ -384,7 +384,14 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(460))
+    // The chips settle the panel width. Measured against the real Button and Style
+    // tokens (JetBrainsMono Nerd Font at 10px, 9px side padding): five chips need
+    // 425, six need 511. The fixed 460 left six chips 63px short, and a squeezed
+    // row clips its labels because they do not elide. Following the row's own
+    // width is the exact answer as providers are added, and fittedContentWidth
+    // clamps to the screen, so it can never overflow.
+    contentWidth: panel.fittedContentWidth(Math.max(Style.space(460),
+                                                    (providerSwitch ? providerSwitch.implicitWidth : 0) + panel.padding * 2 + Style.space(28)))
     // Taller than the control panels on purpose: this one is a dashboard, and
     // the whole point is reading limits and history without scrolling.
     contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(640))

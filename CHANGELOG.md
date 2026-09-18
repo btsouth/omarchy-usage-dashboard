@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep the bar panel's provider row on one line as providers are added. The row shares the width evenly, so a fixed panel width squeezes it once a sixth provider appears and the labels clip, because those chips do not elide. The panel now asks for the width the chip row actually needs (measured against the real Button and Style tokens: 425 for five chips, 511 for six) and never exceeds the screen, so a new provider needs no width change by hand.
+
 - Filter the whole page by model, so the summary cards, the chart, the provider cards, and every breakdown describe one model across all the routes that served it: its cached and uncached input, its output, its cache savings, and its API value, all its own. Pick one from the row under the accounts, or open a Models-table row, which also jumps to that model's sessions. Changing the period keeps the filter, so one model over 30 days is a single extra click.
 - Show the period comparison under a filter instead of the words "Filtered activity", since both periods are narrowed the same way and the figure is valid, and say plainly when a filter matches nothing rather than suggesting a history folder is missing.
 
