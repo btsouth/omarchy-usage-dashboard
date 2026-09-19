@@ -28,7 +28,7 @@ Open the new bar widget and click **Open analytics**, or search for **AI Usage D
 
 The installer adds **AI Usage Dashboard** alongside Omarchy's built-in **Agents** widget. It does not automatically replace it, and it says so when another installed widget serves the same job, naming the plugin it found.
 
-For a single AI icon, remove the old Agents widget from your bar layout after installing. Keep the new AI Usage Dashboard widget: it shows everything the built-in one does for Codex and Claude, and adds the providers, ordering, launch commands, and notifications described below. Omarchy's packaged files are unchanged, and you can add the original widget back later.
+For a single AI icon, remove the old Agents widget from your bar layout after installing. Keep the new AI Usage Dashboard widget: it covers Codex, Claude, and Fireworks like the built-in one, and adds the providers, ordering, launch commands, and notifications described below. Omarchy's packaged files are unchanged, and you can add the original widget back later.
 
 If the new widget does not appear, run:
 
@@ -79,7 +79,7 @@ The widget reads its settings from its entry in `bar.layout` in `~/.config/omarc
 
 ## Reset notifications
 
-After every refresh, the dashboard compares each provider's limits against the previous run and sends a desktop notification when a weekly or monthly window resets — or when banked reset credits arrive, which is how Codex delivers dropped resets. Session windows never notify. Alerts cover Codex and Claude by default; adding a provider to the dashboard never silently opts it in. Extend the list by running the notifier yourself with more providers:
+After every refresh, the dashboard compares each provider's limits against the previous run and sends a desktop notification when a weekly or monthly window resets — or when banked reset credits arrive, which is how Codex delivers dropped resets. Short windows never notify: a label shaped in minutes or hours, or named a session, is excluded. Alerts cover Codex and Claude by default; adding a provider to the dashboard never silently opts it in. Extend the list by running the notifier yourself with more providers:
 
 ```sh
 ~/.local/bin/omarchy-usage-dashboard-notify-resets --provider ollama-cloud
