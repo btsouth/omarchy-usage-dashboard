@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Cursor usage: cloud usage events, per model, carrying the input, output, and cache-read tokens each one spent and its list-price cost, plus a billing-cycle quota meter with its reset date. Cursor is the first source here that cannot be rebuilt from local files, so it is read from Cursor's own API using the session the desktop app already stores locally; that token is never copied, logged, or sent anywhere but Cursor. Event costs are list prices and plan discounts are not applied per event, so the quota card's billed total is the figure to trust where the two disagree.
+- Check for a clashing built-in widget off the machine's own Omarchy path. The installer read `/usr/share/omarchy` directly — a path that exists on the machine this was developed on and nowhere else — so the check passed there and went red the moment it ran anywhere else. It now follows the `OMARCHY_PATH` convention `refresh.sh` already uses, and its test stages a fixture manifest instead of reaching for the host's.
+- Say in the README what the project counts, and that Fireworks starts off, so the opening paragraph matches what the widget actually does.
+
 ## 1.4.0 - 2026-09-19
 
 - Count Command Code's own sessions. The CommandCode route used to know only what the Hermes ledger recorded, so work driven through the Command Code CLI — whatever model it ran — never reached the dashboard, and the model list showed the tail of last night's Hermes sessions long after the day had moved on. The collector now reads Command Code's session transcripts the way it reads Claude Code's, per message with its own usage, skips the checkpoints mirrors, and prices the models through the same CommandCode rate table, so the provider card carries the whole account: Hermes routes, the CLI, and the agents that run through it.
