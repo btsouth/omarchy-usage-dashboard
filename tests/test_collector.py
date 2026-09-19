@@ -89,6 +89,36 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(ledger.db.execute('SELECT COUNT(*),SUM(output) FROM events').fetchone(), (1, 30))
         ledger.db.close()
 
+    def commandcode_event(self, mid='m1', model='glm-5.3-flash', ts='2026-09-19T12:00:00Z'):
+        return {'type': 'message', 'id': mid, 'timestamp': ts, 'model': model,
+                'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': 'hi'}]},
+                'usage': {'inputTokens': 100, 'outputTokens': 20, 'cacheReadTokens': 70, 'cacheWriteTokens': 5}}
+
+    def test_commandcode_session_usage_and_checkpoint_skip(self):
+        header = {'type': 'session', 'version': 3, 'id': 'sess-1', 'timestamp': '2026-09-19T11:59:00Z',
+                  'cwd': '/home/bts/Projects/demo'}
+        path = self.transcript('commandcode/home-bts-projects-demo/abc.jsonl',
+                               [header, self.commandcode_event(), self.commandcode_event(mid='m2', model='deepseek/deepseek-v4.1-flash')])
+        self.transcript('commandcode/home-bts-projects-demo/abc.checkpoints.jsonl', [self.commandcode_event(mid='ghost')])
+        ledger = c.Ledger(self.root / 'commandcode.sqlite')
+        for r in c.commandcode_records(path): ledger.put(r)
+        rows = ledger.db.execute('SELECT session, model, project, client, input, output, cacheRead, cacheWrite FROM events ORDER BY model').fetchall()
+        self.assertEqual(rows, [
+            ('sess-1', 'deepseek/deepseek-v4.1-flash', '/home/bts/Projects/demo', 'Command Code', 100, 20, 70, 5),
+            ('sess-1', 'glm-5.3-flash', '/home/bts/Projects/demo', 'Command Code', 100, 20, 70, 5),
+        ])
+        ledger.db.close()
+
+    def test_commandcode_stream_chunk_upserts_final_usage(self):
+        path = self.transcript('commandcode/x/abc.jsonl', [self.commandcode_event(mid='m1')])
+        ledger = c.Ledger(self.root / 'cc.sqlite')
+        for r in c.commandcode_records(path): ledger.put(r)
+        grown = self.transcript('commandcode/x/abc.jsonl', [self.commandcode_event(mid='m1'),
+                                                            self.commandcode_event(mid='m2')])
+        for r in c.commandcode_records(grown): ledger.put(r)
+        self.assertEqual(ledger.db.execute('SELECT COUNT(*) FROM events').fetchone(), (2,))
+        ledger.db.close()
+
     def test_unknown_price_is_not_zero(self):
         r = c.record('1', 'codex', 's', 1, 'missing', '', 'CLI', input=100)
         self.assertEqual(c.price(r, {}), (None, None))

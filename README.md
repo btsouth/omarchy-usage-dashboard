@@ -97,7 +97,7 @@ After every refresh, the dashboard compares each provider's limits against the p
 | Pi / Oh My Pi | Saved assistant usage | Not collected |
 | Muse | Completed model responses, including subagents | From the existing Muse login |
 | Ollama Cloud | Hermes agent sessions and background work | From an Ollama Cloud API key |
-| CommandCode | Hermes agent sessions | From a CommandCode API key |
+| CommandCode | Hermes agent sessions and Command Code CLI transcripts | From a CommandCode API key |
 | ClinePass | Hermes agent sessions | From a ClinePass API key |
 | Hermes (OpenCode Go, Ollama Cloud, CommandCode, ClinePass) | Agent sessions, including background work | Not collected; adds to the cards for those routes |
 

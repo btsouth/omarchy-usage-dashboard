@@ -30,7 +30,7 @@ PROVIDERS = {'codex': 'Codex', 'claude': 'Claude', 'opencode-go': 'OpenCode Go',
              'ollama-cloud': 'Ollama Cloud', 'commandcode': 'CommandCode',
              'clinepass': 'ClinePass'}
 HOME_KEYS = ('codexHomes', 'claudeHomes', 'grokHomes', 'geminiHomes', 'opencodeHomes', 'piHomes', 'ompHomes',
-             'museHomes', 'hermesHomes')
+             'museHomes', 'commandcodeHomes', 'hermesHomes')
 # Provider ids used by the Hermes agent's own per-model usage table. Hermes
 # bills the same routes this dashboard reads elsewhere, so its ledger is a
 # source, not a separate provider. Two of these are the same product reached
@@ -300,6 +300,32 @@ def claude_records(path):
                          cacheRead=u.get('cache_read_input_tokens'), cacheWrite=u.get('cache_creation_input_tokens'),
                          cacheWrite1h=(u.get('cache_creation') or {}).get('ephemeral_1h_input_tokens'),
                          reasoning=(u.get('output_tokens_details') or {}).get('thinking_tokens'))
+
+
+def commandcode_records(path):
+    # A session folder keeps the transcript, a checkpoints mirror, and a
+    # metadata file side by side; only the transcript carries usage lines.
+    if path.name.endswith('.checkpoints.jsonl'): return
+    session = path.stem
+    cwd = ''
+    with path.open(errors='replace') as f:
+        for raw in f:
+            try: item = json.loads(raw)
+            except ValueError: continue
+            if not isinstance(item, dict): continue
+            if item.get('type') == 'session':
+                session = str(item.get('id') or session)
+                cwd = str(item.get('cwd') or '')
+                continue
+            if item.get('type') != 'message': continue
+            model = item.get('model')
+            u = item.get('usage')
+            if not model or not isinstance(u, dict): continue
+            yield record(digest('commandcode', session, item.get('id')) if item.get('id')
+                         else digest('commandcode', session, item.get('timestamp'), u),
+                         'commandcode', session, item.get('timestamp'), model, cwd or path.parent.name,
+                         'Command Code', input=u.get('inputTokens'), output=u.get('outputTokens'),
+                         cacheRead=u.get('cacheReadTokens'), cacheWrite=u.get('cacheWriteTokens'))
 
 
 def grok_records(path):
@@ -664,10 +690,11 @@ class Ledger:
             ('gemini', [str(HOME / '.gemini')] + cfg.get('geminiHomes', []), gemini_records),
             ('pi', [os.getenv('PI_CODING_AGENT_DIR', str(HOME / '.pi/agent'))] + cfg.get('piHomes', []), pi_records),
             ('omp', [str(HOME / '.omp/agent')] + cfg.get('ompHomes', []), lambda path: pi_records(path, 'omp')),
-            ('muse', [os.getenv('MUSE_HOME') or str(Path(os.getenv('XDG_DATA_HOME', HOME / '.local/share')) / 'muse')] + cfg.get('museHomes', []), muse_records)):
+            ('muse', [os.getenv('MUSE_HOME') or str(Path(os.getenv('XDG_DATA_HOME', HOME / '.local/share')) / 'muse')] + cfg.get('museHomes', []), muse_records),
+            ('commandcode', [str(HOME / '.commandcode')] + cfg.get('commandcodeHomes', []), commandcode_records)):
             for root in sorted(set(roots)):
                 root = Path(root).expanduser()
-                folders = [root / 'sessions', root / 'archived_sessions'] if provider == 'codex' else [root / {'claude': 'projects', 'gemini': 'tmp'}.get(provider, 'sessions')]
+                folders = [root / 'sessions', root / 'archived_sessions'] if provider == 'codex' else [root / {'claude': 'projects', 'gemini': 'tmp', 'commandcode': 'projects'}.get(provider, 'sessions')]
                 for folder in folders:
                     pattern = 'updates.jsonl' if provider == 'grok' else '*.json*' if provider == 'gemini' else 'session.jsonl' if provider == 'muse' else '*.jsonl'
                     files = sorted(folder.rglob(pattern)) if folder.exists() else []
