@@ -59,6 +59,9 @@
         },
         "clinepass": {
           "enabled": true
+        },
+        "fireworks": {
+          "enabled": false
         }
       },
       "refreshIntervalSec": 900,
