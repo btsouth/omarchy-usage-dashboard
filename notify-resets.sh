@@ -22,6 +22,13 @@ set -uo pipefail
 
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/agents"
 USAGE_DIR="$STATE_DIR/usage"
+# The timer's post-scan run and a panel-triggered refresh can overlap; the
+# second one out skips instead of double-notifying. Same convention as the
+# collector's lock, non-blocking so the loser exits clean.
+LOCK="$STATE_DIR/reset-snapshot.lock"
+mkdir -p "$STATE_DIR"
+exec 9>"$LOCK"
+flock -n 9 || exit 0
 SNAP="$STATE_DIR/reset-snapshot.json"
 
 PROVIDERS=(codex claude)

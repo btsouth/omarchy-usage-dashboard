@@ -48,6 +48,26 @@ class NotifyResetsTests(unittest.TestCase):
         for label in EXCLUDED:
             self.check(label, False)
 
+    def test_lock_holder_skips_second_run(self):
+        import fcntl
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            usage = state / 'omarchy/agents/usage'
+            usage.mkdir(parents=True)
+            (usage / 'codex.json').write_text(json.dumps(
+                {'id': 'codex', 'name': 'Codex',
+                 'limits': [{'label': 'Weekly', 'percent': 0.9,
+                             'resetsAt': '2026-09-19T10:00:00+00:00'}]}))
+            lock = open(state / 'omarchy/agents/reset-snapshot.lock', 'w')
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            env = dict(os.environ, XDG_STATE_HOME=str(state))
+            result = subprocess.run(['bash', str(NOTIFIER)],
+                                    env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0)
+            self.assertFalse((state / 'omarchy/agents/reset-snapshot.json').exists())
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            lock.close()
+
 
 if __name__ == '__main__':
     unittest.main()
