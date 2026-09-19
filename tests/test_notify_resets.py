@@ -48,6 +48,29 @@ class NotifyResetsTests(unittest.TestCase):
         for label in EXCLUDED:
             self.check(label, False)
 
+    def test_banked_credits_notify_once_and_do_not_opt_in_other_providers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            usage = state / 'omarchy/agents/usage'; usage.mkdir(parents=True)
+            stub = state / 'bin'; stub.mkdir()
+            sender = stub / 'notify-send'
+            sender.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$FAKE_LOG"\n')
+            sender.chmod(0o755)
+            calls = state / 'calls'
+            env = dict(os.environ, HOME=tmp, XDG_STATE_HOME=tmp,
+                       FAKE_LOG=str(calls), PATH=str(stub) + os.pathsep + os.environ['PATH'])
+            def run(credits):
+                for provider in ('codex', 'cursor'):
+                    (usage / (provider + '.json')).write_text(json.dumps(
+                        {'id': provider, 'name': provider, 'resetCreditsAvailable': credits, 'limits': []}))
+                subprocess.run(['bash', str(NOTIFIER)], env=env, check=True, capture_output=True)
+            run(1); self.assertFalse(calls.exists())
+            run(2); run(2); run(1)
+            lines = calls.read_text().splitlines()
+            self.assertEqual(len(lines), 1)
+            self.assertIn('Banked resets: 1 -> 2', lines[0])
+            self.assertNotIn('cursor', lines[0])
+
     def test_lock_holder_skips_second_run(self):
         import fcntl
         with tempfile.TemporaryDirectory() as tmp:

@@ -16,7 +16,7 @@ Requires Omarchy 4 with Quickshell, Python 3.11+, and a systemd user session. Ol
 curl -fsSL https://raw.githubusercontent.com/btsouth/omarchy-usage-dashboard/main/install.sh | bash -s -- --with-plugin
 ```
 
-Drop `--with-plugin` for the dashboard without the bar widget. Pin a release with `OMARCHY_USAGE_REF=v1.5.0` in front of the command. Installing from a checkout also works:
+Drop `--with-plugin` for the dashboard without the bar widget. To pin a release, pass the ref to Bash after the pipe: `curl -fsSL https://raw.githubusercontent.com/btsouth/omarchy-usage-dashboard/main/install.sh | OMARCHY_USAGE_REF=v1.5.0 bash -s -- --with-plugin`. Installing from a checkout also works:
 
 ```sh
 git clone https://github.com/btsouth/omarchy-usage-dashboard.git
@@ -84,7 +84,7 @@ The widget reads its settings from its entry in `bar.layout` in `~/.config/omarc
 After every refresh, the dashboard compares each provider's limits against the previous run and sends a desktop notification when a weekly or monthly window resets — or when banked reset credits arrive, which is how Codex delivers dropped resets. Short windows never notify: a label shaped in minutes or hours, or named a session, is excluded. Alerts cover Codex and Claude by default; adding a provider to the dashboard never silently opts it in. Extend the list by running the notifier yourself with more providers:
 
 ```sh
-~/.local/bin/omarchy-usage-dashboard-notify-resets --provider ollama-cloud
+~/.local/bin/omarchy-usage-dashboard-notify-resets --provider commandcode
 ```
 
 ## Supported sources
@@ -109,7 +109,7 @@ Sources with recorded history appear automatically on a fresh install. Use **Set
 
 Hermes records its own per-route totals, and OpenCode Go reaches the same account through two apps now. Both are counted: OpenCode's transcripts carry the per-request detail from the OpenCode client, and Hermes sessions are added from its own ledger. The two share no session or message ids, so nothing is double counted, and the added total reconciles to the agent's own ledger exactly. Hermes rows can additionally be split by what they were for (typed prompts versus title generation, compression, vision, approvals, and background review) in the client breakdown.
 
-Normal ChatGPT, Grok web, and Gemini web conversations are not included. Cursor, Copilot, Windsurf, and Antigravity are not supported. See [provider coverage](docs/provider-coverage.md) for formats and validation limits.
+Normal ChatGPT, Grok web, and Gemini web conversations are not included. Copilot, Windsurf, and Antigravity are not supported. See [provider coverage](docs/provider-coverage.md) for formats and validation limits.
 
 ## Multiple accounts
 
@@ -126,11 +126,11 @@ Account labels group history, not credentials. **All accounts** shows the curren
 - **Per-session averages** cover recorded activity in the selected period. A session is not a completed task or a model-efficiency benchmark.
 - **Models** are counted once per model across the routes that served it, so a model reached through more than one provider is a single row. Its detail shows the split by route and the model string each route recorded. Prices are unaffected: every route's tokens are priced at that route's own rates and then added up.
 - **Filter by model** to narrow the whole page to one model, across every route that served it. The summary cards, the chart, the provider cards, the breakdown table, and the Go allowance card then describe only that model, so its cached and uncached input, its output, its cache savings, and its API value are all its own. Choose one from the row under the accounts, or open a Models-table row, which also jumps to that model's sessions. Changing the period keeps the filter, so DeepSeek at 30 days is one more click.
-- **Switch a source off** in the source row at the top to leave its history out of the view. The chip goes struck through, the filter line names it, and the summary, the chart, the cards, and every breakdown drop it together. This is a view filter only: Settings still decides what the machine collects, so switching a source off here does not stop it being counted later. **Overview** puts every source back.
+- **Switch a source off** in the source row at the top to leave its history out of the view. The chip goes struck through, the filter line names it, and the summary, the chart, the cards, and every breakdown drop it together. This is a view filter only: Settings controls visible providers and optional quota collection. Local transcript history continues to be indexed during scans. **Overview** puts every source back.
 
 History refreshes every 15 minutes, along with OpenCode Go, Ollama Cloud, CommandCode, ClinePass, and enabled Grok quota. **Refresh** also requests fresh Codex and Claude limits from Omarchy. See [pricing details](docs/pricing.md) for rates and accounting.
 
-Metrics stay on your machine. The ledger stores counters, model names, project paths, session IDs, and timestamps. It does not copy conversation bodies or credentials. There is no telemetry.
+Reports are generated locally. Provider quota requests and Cursor history requests contact the provider using your existing credentials. Optional ledger sync writes counters and source paths into the folder you choose, which your sync software may transfer to another machine. See [network and privacy details](docs/provider-coverage.md#network-and-privacy). The ledger stores counters, model names, project paths, session IDs, and timestamps. It does not copy conversation bodies or credentials. There is no telemetry.
 
 ## Update
 

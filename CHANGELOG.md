@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Make reports read-only. Collect on open, Refresh, settings save, and the timer instead of scanning whenever a filter changes. Keep demo and test source paths isolated.
+- Fix Cursor fallback pagination, capped-history resume, forced refresh, and stale error status. Commit events before advancing the history watermark, and rebuild old watermarks once to recover truncated pulls. Missing event prices stay unpriced.
+- Keep Go allowance estimates within the selected account and drilldown. Prevent unlisted resale models from falling back to another provider's prices.
+- Keep raw OpenCode Go errors out of quota caches, and reject path separators in ledger device ids.
+- Make interrupted upgrades recoverable, quote the notifier's systemd path, and remove temporary archive files after installation.
+- Correct Cursor support, uninstall, release-pinning, and privacy documentation. Add regression and installed-runtime checks.
+
 ## 1.5.0 - 2026-09-19
 
 - Cursor usage: cloud usage events, per model, carrying the input, output, and cache-read tokens each one spent and its list-price cost, plus a billing-cycle quota meter with its reset date. Cursor is the first source here that cannot be rebuilt from local files, so it is read from Cursor's own API using the session the desktop app already stores locally; that token is never copied, logged, or sent anywhere but Cursor. Event costs are list prices and plan discounts are not applied per event, so the quota card's billed total is the figure to trust where the two disagree.

@@ -73,7 +73,7 @@ def main():
         retained=[]
         for key,entry in list(managed['files'].items()):
             path=Path(key)
-            if path.is_symlink() or (path.exists() and digest(path.read_bytes())!=entry['hash']):
+            if path.is_symlink() or (path.exists() and digest(path.read_bytes()) not in (entry['hash'],entry.get('pendingHash'))):
                 retained.append(key); continue
             if entry['original'] is None: path.unlink(missing_ok=True)
             else: atomic(path,base64.b64decode(entry['original']),entry['mode'])
@@ -106,7 +106,7 @@ def main():
     for name,script in [(APP,'launch.sh'),(APP+'-refresh','refresh.sh'),(APP+'-notify-resets','notify-resets.sh')]:
         add(home/'.local/bin'/name,'#!/bin/bash\nexec '+shlex.quote(str(runtime/script))+' "$@"\n',0o755)
     add(data/'applications'/f'{APP}.desktop','[Desktop Entry]\nType=Application\nName=AI Usage Dashboard\nComment=Local coding-agent token history and comparisons\nExec="'+encode_exec(home/'.local/bin'/APP)+'"\nIcon=utilities-system-monitor\nTerminal=false\nCategories=Utility;\n')
-    add(config/'systemd/user'/f'{APP}.service','[Unit]\nDescription=Refresh AI Usage Dashboard\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 "'+encode_exec(runtime/'collector.py',True)+'" scan\nExecStartPost='+encode_exec(runtime/'notify-resets.sh',True)+'\n')
+    add(config/'systemd/user'/f'{APP}.service','[Unit]\nDescription=Refresh AI Usage Dashboard\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 "'+encode_exec(runtime/'collector.py',True)+'" scan\nExecStartPost="'+encode_exec(runtime/'notify-resets.sh',True)+'"\n')
     add(config/'systemd/user'/f'{APP}.timer','[Unit]\nDescription=Refresh AI Usage Dashboard every 15 minutes\n[Timer]\nOnStartupSec=2min\nOnUnitActiveSec=15min\nPersistent=true\n[Install]\nWantedBy=timers.target\n')
     shell=None;bar_entry=None
     if args.with_plugin:
@@ -120,7 +120,7 @@ def main():
     for path,(content,mode) in plan.items():
         entry=managed['files'].get(str(path))
         if path.is_symlink(): parser.error('Refusing to replace symlink: '+str(path))
-        if path.exists() and entry and digest(path.read_bytes())!=entry['hash']:
+        if path.exists() and entry and digest(path.read_bytes()) not in (entry['hash'],entry.get('pendingHash')):
             parser.error('Preserving locally edited file: '+str(path))
         if path.exists() and not path.is_file(): parser.error('Destination is not a file: '+str(path))
     for path,(content,mode) in plan.items():
@@ -128,7 +128,9 @@ def main():
         if key not in managed['files']:
             managed['files'][key]={'original':base64.b64encode(path.read_bytes()).decode() if path.exists() else None,
                                   'mode':path.stat().st_mode & 0o777 if path.exists() else None}
-        managed['files'][key]['hash']=digest(content)
+        entry=managed['files'][key]
+        entry.setdefault('hash',digest(path.read_bytes()) if path.exists() else digest(content))
+        entry['pendingHash']=digest(content)
     # Persist rollback information before mutations, including partial-install recovery.
     managed['timer']=True
     if bar_entry: managed['barEntry']=bar_entry
@@ -136,6 +138,9 @@ def main():
     for path,(content,mode) in plan.items():
         if not path.exists() or path.read_bytes()!=content: atomic(path,content,mode)
     if bar_entry: atomic(shell_path,(json.dumps(shell,indent=2)+'\n').encode())
+    for entry in managed['files'].values():
+        if 'pendingHash' in entry: entry['hash']=entry.pop('pendingHash')
+    save_registry()
     ctl('daemon-reload');ctl('enable','--now',APP+'.timer')
     print('Installed AI Usage Dashboard. Run:',home/'.local/bin'/APP)
     if args.with_plugin:

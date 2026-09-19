@@ -184,6 +184,8 @@ def save_settings(value):
     if str(value.get('ledgerSyncDir') or '').strip():
         clean['ledgerSyncDir'] = str(Path(str(value['ledgerSyncDir'])).expanduser().absolute())
     if len(clean['ledgerDeviceId']) > 80: raise ValueError('Give the ledger device id 80 characters or fewer.')
+    if clean['ledgerDeviceId'] in ('.', '..') or any(c in clean['ledgerDeviceId'] for c in '/\\\0'):
+        raise ValueError('Use a device id without path separators.')
     for key in HOME_KEYS:
         clean[key] = sorted({str(Path(p).expanduser().absolute()) for p in value.get(key, []) if str(p).strip()})
     if not clean['localAccountLabel'] or len(clean['localAccountLabel']) > 80: raise ValueError('Give the local history group a name of 1 to 80 characters.')
@@ -221,7 +223,7 @@ def save_settings(value):
 
 def number(value):
     try: return max(0, int(value or 0))
-    except (ValueError, TypeError): return 0
+    except (ValueError, TypeError, OverflowError): return 0
 
 
 def timestamp(value):
@@ -507,7 +509,7 @@ def event_ms(value):
     try: return int(text)
     except (ValueError, TypeError): pass
     try: return int(float(text))
-    except (ValueError, TypeError): pass
+    except (ValueError, TypeError, OverflowError): pass
     return int(timestamp(value) * 1000)
 
 
@@ -518,9 +520,9 @@ def cursor_api_record(ev):
     if not isinstance(usage, dict): usage = {}
     conv = ev.get('conversationId') or 'cloud'
     model = str(ev.get('model') or 'unknown')
-    try: cents = float(usage.get('totalCents') or 0)
-    except (ValueError, TypeError): cents = 0
-    if not math.isfinite(cents): cents = 0
+    try: cents = float(usage.get('totalCents'))
+    except (ValueError, TypeError): cents = None
+    if cents is not None and not math.isfinite(cents): cents = None
     r = record(digest('cursor-api', ms, model, conv, number(usage.get('inputTokens')),
                       number(usage.get('outputTokens')), number(usage.get('cacheReadTokens'))),
                'cursor', conv, ms // 1000, model, '',
@@ -530,7 +532,7 @@ def cursor_api_record(ev):
     r['turns'] = 1
     # A literal float: reported_value() maps 0 to None, which would unprice
     # free rows. Non-chargeable events already carry 0 cents.
-    r['reportedValue'] = max(0.0, cents / 100)
+    r['reportedValue'] = max(0.0, cents / 100) if cents is not None else None
     return r
 
 
@@ -538,7 +540,8 @@ def cursor_fetch_page(token, body):
     try: return cursor_post(token, 'GetFilteredUsageEvents', body)
     except Exception as exc:
         if getattr(exc, 'code', None) == 400 and body.get('pageSize', 0) > 100:
-            return cursor_post(token, 'GetFilteredUsageEvents', dict(body, pageSize=100))
+            body['pageSize'] = 100
+            return cursor_post(token, 'GetFilteredUsageEvents', body)
         raise
 
 
@@ -564,7 +567,7 @@ def cursor_walk(token, end=None, stop_ms=0, cycle_ms=0):
             stamps = [s for s in stamps if s > 0]
             if not stamps: complete = True; break
             oldest = min(stamps)
-            if len(page) < 1000 or not fresh: complete = True; break
+            if len(page) < body['pageSize'] or not fresh: complete = True; break
             if stop_ms and oldest <= stop_ms: complete = True; break
             if cycle_ms and oldest < cycle_ms: complete = True; break
             if oldest < (time.time() - 400 * 86400) * 1000: complete = True; break
@@ -589,7 +592,14 @@ def cursor_usage(ledger, force=False):
     path = STATE / 'cursor-usage.json'
     try: cached = json.loads(path.read_text())
     except (OSError, ValueError): cached = {}
-    if not force and time.time() - cached.get('attemptedAt', 0) < 300: return source, []
+    # Older pagination could mark a truncated pull complete. Rebuild its
+    # watermark once; stable event ids make the repair idempotent.
+    if cached.get('historyVersion') != 1: cached = {}
+    if not force and time.time() - cached.get('attemptedAt', 0) < 300:
+        if cached.get('error') or cached.get('fullPullPending'):
+            source['readErrors'] = 1
+            return source, ['Cursor cloud history is incomplete or unavailable; showing previous records.']
+        return source, []
     token = cursor_token()
     if token is None:
         source['readErrors'] = 1
@@ -601,33 +611,33 @@ def cursor_usage(ledger, force=False):
             stop_ms = cached['newestTs']
             if cached.get('fullPullPending') and isinstance(cached.get('resumeFloorMs'), int):
                 end = cached['resumeFloorMs'] - 1
-        if end is None:
-            records, oldest, complete = cursor_walk(token, end, stop_ms, cycle_ms)
-        else:
-            # Resuming history below the floor: the incremental stop would
-            # fire on the first older page, so the resume walk runs
-            # stop-free to a natural stop. A top-up walk first captures
-            # arrivals newer than the cached newest marker.
-            top, _, top_complete = cursor_walk(token, None, stop_ms, cycle_ms)
-            res, oldest, res_complete = cursor_walk(token, end, 0, cycle_ms)
-            records, complete = top + res, top_complete and res_complete
-        newest = max([cached.get('newestTs') or 0] + [r['ts'] * 1000 for r in records])
+        # Finish one contiguous history range before collecting new arrivals.
+        # Advancing the newest marker during a capped top-up can strand the
+        # gap between that top-up and the saved history floor permanently.
+        records, oldest, complete = cursor_walk(token, end, 0 if end is not None else stop_ms, cycle_ms)
+        newest = (cached.get('newestTs') or 0) if end is not None else max(
+            [cached.get('newestTs') or 0] + [r['ts'] * 1000 for r in records])
         if not complete:
             for r in records: ledger.put(r, 'cursor-api')
-            cached = {'attemptedAt': time.time(), 'billingCycleStart': cycle_ms,
+            cached = {'historyVersion': 1, 'attemptedAt': time.time(), 'billingCycleStart': cycle_ms,
                       'newestTs': newest, 'fullPullPending': True,
                       'resumeFloorMs': oldest or 0, 'error': ''}
+            ledger.db.commit()
             atomic_json(path, cached)
             source['readErrors'] = 1
             return source, ['Cursor cloud history is incomplete; the next refresh resumes where this one stopped.']
         for r in records: ledger.put(r, 'cursor-api')
         if records: purge_legacy_cursor(ledger)
-        cached = {'attemptedAt': time.time(), 'billingCycleStart': cycle_ms,
+        cached = {'historyVersion': 1, 'attemptedAt': time.time(), 'billingCycleStart': cycle_ms,
                   'newestTs': newest, 'fullPullPending': False,
                   'resumeFloorMs': 0, 'error': ''}
+        # Persist events before the watermark so an interrupted scan cannot
+        # advance past rows that SQLite would roll back.
+        ledger.db.commit()
         atomic_json(path, cached)
         return source, []
     except Exception as exc:
+        cached['historyVersion'] = 1
         cached['attemptedAt'] = time.time()
         cached['error'] = str(exc) if isinstance(exc, CursorApiUnavailable) else 'Cursor cloud usage unavailable. Check the connection and try again.'
         atomic_json(path, cached)
@@ -736,10 +746,17 @@ def hermes_records(path):
 
 
 class Ledger:
-    def __init__(self, path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(path, timeout=60)
-        os.chmod(path, 0o600)
+    def __init__(self, path, readonly=False):
+        if readonly and path.exists():
+            self.db = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=60)
+            self.db.execute('BEGIN')
+            return
+        if readonly:
+            self.db = sqlite3.connect(':memory:')
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self.db = sqlite3.connect(path, timeout=60)
+            os.chmod(path, 0o600)
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.executescript('''
           CREATE TABLE IF NOT EXISTS events (
@@ -786,7 +803,7 @@ class Ledger:
         update += ',reportedCostTicks=COALESCE(MAX(COALESCE(events.reportedCostTicks,0),excluded.reportedCostTicks),events.reportedCostTicks)'
         update += ',modelCalls=MAX(COALESCE(events.modelCalls,0),COALESCE(excluded.modelCalls,0))'
         update += ',turns=MAX(COALESCE(events.turns,0),COALESCE(excluded.turns,0))'
-        update += ',reportedValue=COALESCE(MAX(COALESCE(events.reportedValue,0),excluded.reportedValue),events.reportedValue)'
+        update += ",reportedValue=CASE WHEN excluded.provider='cursor' THEN excluded.reportedValue ELSE COALESCE(MAX(COALESCE(events.reportedValue,0),excluded.reportedValue),events.reportedValue) END"
         update += ',apiProvider=COALESCE(excluded.apiProvider,events.apiProvider)'
         self.db.execute(f'INSERT INTO events ({",".join(keys)}) VALUES ({",".join("?" for _ in keys)}) '
                         f'ON CONFLICT(id) DO UPDATE SET {update}', list(r.values()))
@@ -856,7 +873,7 @@ class Ledger:
         finally:
             conn.close()
 
-    def scan(self, cfg):
+    def scan(self, cfg, force=False):
         cfg = dict(cfg)
         for account in cfg.get('accounts', []):
             for directory in account['directories']:
@@ -951,8 +968,8 @@ class Ledger:
                 source['readErrors'] = 1
                 warnings.append('Hermes database could not be read; retained previous records.')
 
-        if 'cursor' in cfg.get('enabled', []):
-            csource, cwarnings = cursor_usage(self)
+        if 'cursor' in cfg.get('enabled', []) and os.getenv('AI_USAGE_DEMO') != '1':
+            csource, cwarnings = cursor_usage(self, force=force)
             sources.append(csource)
             warnings.extend(cwarnings)
         for source in sources:
@@ -1009,7 +1026,8 @@ def price(r, catalog):
     if r['provider'] == 'grok':
         ticks = r.get('reportedCostTicks')
         return (ticks / 10_000_000_000, None) if ticks else (None, None)
-    if r['provider'] in ('opencode', 'pi', 'omp', 'cursor') and r.get('reportedValue') is not None:
+    if r['provider'] == 'cursor': return r.get('reportedValue'), None
+    if r['provider'] in ('opencode', 'pi', 'omp') and r.get('reportedValue') is not None:
         return r['reportedValue'], None
     fallback = r.get('reportedValue') if r['provider'] == 'opencode-go' else None
     fallback = (fallback, None) if fallback is not None else (None, None)
@@ -1019,7 +1037,9 @@ def price(r, catalog):
     # wire-format routes read the same namespaced keys rather than falling
     # through to the lab's own list price for a same-named model.
     if r['provider'] == 'commandcode': lookup = 'commandcode/' + model
-    rate = catalog.get(lookup) or catalog.get(model) or catalog.get('anthropic/' + model) or catalog.get('openai/' + model) or catalog.get('gemini/' + model)
+    rate = catalog.get(lookup)
+    if not rate and r['provider'] not in ('ollama-cloud', 'commandcode', 'clinepass'):
+        rate = catalog.get(model) or catalog.get('anthropic/' + model) or catalog.get('openai/' + model) or catalog.get('gemini/' + model)
     if not rate: return fallback
     # Internal models have no published rate and are not billed per token.
     if rate.get('internal'): return 0.0, None
@@ -1070,12 +1090,12 @@ def go_quota(force=False):
         auth_path = Path(os.getenv('XDG_DATA_HOME', HOME / '.local/share')) / 'opencode/auth.json'
         auth = json.loads(auth_path.read_text()).get('opencode-go', {})
         key = auth.get('key') if auth.get('type') == 'api' else None
-        if not key: raise ValueError('Connect OpenCode Go in OpenCode to read quota.')
+        if not key: raise QuotaUnavailable('Connect OpenCode Go in OpenCode to read quota.')
         request = urllib.request.Request('https://opencode.ai/zen/go/v1/usage',
                     headers={'Authorization': 'Bearer ' + key, 'User-Agent': 'Omarchy-AI-Usage/0.1'})
         with urllib.request.urlopen(request, timeout=12) as response: data = json.load(response)
         usage = data.get('usage')
-        if not isinstance(usage, dict): raise ValueError('Go returned an unrecognized usage response.')
+        if not isinstance(usage, dict): raise QuotaUnavailable('Go returned an unrecognized usage response.')
         windows = []
         for name, label in [('rolling', 'Session (5-hour)'), ('weekly', 'Weekly (7-day)'), ('monthly', 'Monthly')]:
             w = usage.get(name)
@@ -1083,11 +1103,11 @@ def go_quota(force=False):
             reset = w.get('resetsAt')
             if isinstance(reset, (float, int)): reset = dt.datetime.fromtimestamp(timestamp(reset), dt.timezone.utc).isoformat()
             windows.append({'label': label, 'percent': w['percent'] / 100, 'resetsAt': reset or ''})
-        if not windows: raise ValueError('Go returned no recognized quota windows.')
+        if not windows: raise QuotaUnavailable('Go returned no recognized quota windows.')
         cached = {'limits': windows, 'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(), 'error': ''}
     except Exception as exc:
         # Do not expose credential-bearing request objects or raw response bodies.
-        cached['error'] = str(exc) if isinstance(exc, ValueError) else 'Go quota unavailable. Check the connection in OpenCode.'
+        cached['error'] = str(exc) if isinstance(exc, QuotaUnavailable) else 'Go quota unavailable. Check the connection in OpenCode.'
     cached['attemptedAt'] = time.time()
     atomic_json(path, cached)
     return cached
@@ -1756,7 +1776,9 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
             r = dict(row)
             # The allowance rows follow the model filter too, so the card cannot
             # list models the rest of the page is excluding.
-            if selection.get('model') and model_family(r['model']) != model_family(selection['model']): continue
+            if selection.get('account') and assignments.get(r['id'], 'unassigned') != selection['account']: continue
+            if not selected(r, selection, 'opencode-go'): continue
+            if selection.get('day') and str(dt.datetime.fromtimestamp(r['ts']).date()) != selection['day']: continue
             rate = rates['document'].get('opencode-go/' + r['model']) or rates['document'].get(r['model'])
             if not isinstance(rate, dict) or not isinstance(rate.get('monthly_limit_usd'), (int, float)): continue
             entry = used.setdefault(r['model'], [rate, 0.0])
@@ -1872,6 +1894,16 @@ def main():
     # without waiting on a history scan.
     if args.action == 'theme':
         print(json.dumps(theme())); return
+    if args.action == 'report':
+        ledger = Ledger(STATE / 'usage.sqlite', readonly=True)
+        try:
+            cfg = settings()
+            if not CONFIG.exists():
+                found = {r[0] for r in ledger.db.execute('SELECT DISTINCT provider FROM events')}
+                cfg = cfg | {'enabled': [p for p in PROVIDERS if p in found] or cfg['enabled']}
+            print(json.dumps(report(ledger, cfg, args.days, args.provider, selection={k: getattr(args, k) for k in ('model', 'project', 'client', 'apiProvider', 'day', 'account', 'excludeSource') if getattr(args, k)})))
+        finally: ledger.db.close()
+        return
     STATE.mkdir(parents=True, exist_ok=True)
     if args.action == 'settings':
         try:
@@ -1901,9 +1933,14 @@ def main():
             # Auto-enable runs before the scan so sources with recorded
             # history are collected on a fresh install, as documented.
             found = {r[0] for r in ledger.db.execute('SELECT DISTINCT provider FROM events')}
-            cfg = cfg | {'enabled': [p for p in PROVIDERS if p in found] or cfg['enabled']}
-        if args.action in ('scan', 'report'): ledger.scan(cfg)
-        if args.action in ('go', 'scan'):
+            if os.getenv('AI_USAGE_DEMO') != '1' and cursor_token(): found.add('cursor')
+            cfg = cfg | {'enabled': list(dict.fromkeys(cfg['enabled'] + [p for p in PROVIDERS if p in found]))}
+        if args.action == 'scan':
+            ledger.scan(cfg, force=args.force)
+            if not CONFIG.exists():
+                found = {r[0] for r in ledger.db.execute('SELECT DISTINCT provider FROM events')}
+                cfg = cfg | {'enabled': list(dict.fromkeys(cfg['enabled'] + [p for p in PROVIDERS if p in found]))}
+        if args.action in ('go', 'scan') and os.getenv('AI_USAGE_DEMO') != '1':
             go_quota(args.force)
             if args.action == 'go': ledger.scan(cfg)
             write_agent_record(ledger, 'opencode-go')
@@ -1928,8 +1965,7 @@ def main():
             if args.action == 'scan':
                 for p in ('gemini', 'opencode', 'pi', 'omp', 'cursor'):
                     if p in cfg['enabled']: write_agent_record(ledger, p)
-        if args.action == 'report': print(json.dumps(report(ledger, cfg, args.days, args.provider, selection={k: getattr(args, k) for k in ('model', 'project', 'client', 'apiProvider', 'day', 'account', 'excludeSource') if getattr(args, k)})))
-        elif args.action == 'scan': print(json.dumps({'ok': True, 'events': ledger.db.execute('SELECT COUNT(*) FROM events').fetchone()[0]}))
+        if args.action == 'scan': print(json.dumps({'ok': True, 'events': ledger.db.execute('SELECT COUNT(*) FROM events').fetchone()[0]}))
         elif args.action == 'go': print(json.dumps({'ok': not bool(quota('opencode-go').get('error'))}))
         ledger.db.close()
 

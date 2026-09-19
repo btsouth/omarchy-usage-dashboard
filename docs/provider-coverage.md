@@ -33,7 +33,7 @@ A model selection follows the same grouping. Choosing a grouped row, or invoking
 
 The dashboard offers that selection as a filter: a row of models under the accounts narrows the whole page without moving off it, and a Models-table row filters and then opens that model's sessions. Everything filtered is genuinely filtered: the summary, the previous-period comparison, the chart, the provider cards, the Go allowance card's model list, and every breakdown, because one selection is applied before any of them is accumulated. The list of models offered is deliberately not narrowed by the filter itself, or it would collapse to the entry already chosen and a model could not be swapped without clearing first; it does follow the period, a chosen day, the route tab, and the account filter.
 
-A source can be left out the same way. The source row under the title switches one source's history out of the view, and `report --excludeSource <id>` does it for a scripted report; the source is dropped before anything is accumulated, so the summary, the cards, the model filter's own list, and every breakdown agree. This is a view filter and nothing more: settings still decide what the machine collects, and the source keeps being counted for later periods. Excluding a source also drops it from the Go allowance card and, when a row had drilled into that source, clears that scope rather than showing an empty page.
+A source can be left out the same way. The source row under the title switches one source's history out of the view, and `report --excludeSource <id>` does it for a scripted report; the source is dropped before anything is accumulated, so the summary, the cards, the model filter's own list, and every breakdown agree. This is a view filter and nothing more: settings control visible providers and optional quota requests, while local history remains indexed for later periods. Excluding a source also drops it from the Go allowance card and, when a row had drilled into that source, clears that scope rather than showing an empty page.
 
 Gemini records identify projects by hash, so the dashboard labels them as Gemini project IDs. It does not guess the original filesystem path. Deleted or rewound conversation content does not refund tokens: already recorded usage stays in the metric ledger. Ephemeral sessions and calls that never write usage cannot be recovered.
 
@@ -73,3 +73,25 @@ Sources reviewed September 5, 2026:
 - [OpenCode session messages](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/message-v2.ts)
 - [Cursor Admin API](https://prod.cursor.com/docs/account/teams/admin-api)
 - [Copilot CLI reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)
+
+## Network and privacy
+
+`collector.py report` reads the existing ledger without scanning transcripts, changing history, or making provider requests. Opening the dashboard, saving settings, the Refresh button, and the timer run collection separately. Demo mode uses synthetic history and does not make provider requests.
+
+Runtime provider requests use these destinations:
+
+- OpenCode Go: `opencode.ai/zen/go/v1/usage`.
+- Grok: `grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig`.
+- Muse: the API base configured by the local Muse login, defaulting to `api.meta.ai`, with `/muse-code/key`. Returned key material is discarded; only quota fields are cached.
+- Ollama Cloud: `ollama.com/api/usage`.
+- CommandCode: `api.commandcode.ai/alpha/billing/credits`, `/alpha/billing/subscriptions`, and `/alpha/usage/summary`.
+- ClinePass: `api.cline.bot/api/v1/users/me/plan/usage-limits` and `/api/v1/users/me/plan`.
+- Cursor: `api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage` and `GetFilteredUsageEvents`.
+
+Credentials authenticate these requests in headers. Transcript bodies are not uploaded. The native Omarchy quota updater is a separate program invoked by Refresh and follows its own provider integrations. Installation downloads from GitHub; the optional maintainer pricing tools download the documented public catalogs. No telemetry endpoint is present.
+
+Optional ledger sync exports metric counters, timestamps, model and session ids, project paths, and source provenance to the selected directory. A cloud or network sync service managing that directory can transfer those files. Leave ledger sync unset to keep those files local.
+
+Cursor pulls at most 40 pages per scan. A capped pull is marked incomplete and resumes on the next scan; new arrivals are collected after that history range finishes. Pagination is timestamp-based because the endpoint has no stable event cursor in the captured format. More than one full page of distinct events at exactly the same millisecond cannot be proven complete with that interface. Cursor remains fixture-tested against an undocumented endpoint, not independently reconciled against a live account in this review.
+
+Reset alerts default to Codex and Claude. For explicitly added providers, the notifier excludes labels containing session, minutes, or hours. Other labels, including Daily and Billing cycle, qualify. Overlapping runs are locked, but notification delivery is best effort: a desktop daemon failure or process termination between delivery and snapshot persistence cannot provide exactly-once delivery.
