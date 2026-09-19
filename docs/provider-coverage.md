@@ -55,14 +55,13 @@ Grok's completed-turn dollar estimate is used directly. Positive recorded API es
 
 ## Other frequently requested sources
 
-- **Cursor:** Ceiling's local code-tracking database provides activity rather than token usage. Cursor's server-side usage events can provide token categories and costs, but require a separate dashboard/API integration and suitable account access.
 - **Copilot:** current CLI telemetry can expose token usage, but that requires telemetry collection rather than substituting premium requests or AI credits for tokens. IDE and CLI coverage must be distinguished.
 - **Windsurf / Antigravity:** quota support alone would not establish complete per-request token history. Neither is advertised as a token-history integration here.
 - **OpenRouter, DeepSeek, Kimi, MiniMax, Z.ai, and other models through OpenCode/Pi:** their locally recorded usage is covered by the host app integration. That does not include API traffic from unrelated apps or establish account-wide balances.
 
 ## Validation
 
-The new Gemini, Pi, and Oh My Pi parsers are tested against fixtures based on their public formats. There is no real history from those three apps on the development machine, so live session validation remains distinct from fixture coverage. Grok was reconciled against retained local events, including copied history. OpenCode Go and the two retained non-Go OpenCode messages were reconciled against the local database; multi-route and legacy migration behavior also has fixture coverage. Hermes-sourced rows were reconciled against the agent's own ledger totals for both routes to the token, and the two ledgers were confirmed to share no session ids.
+The new Gemini, Pi, and Oh My Pi parsers are tested against fixtures based on their public formats. There is no real history from those three apps on the development machine, so live session validation remains distinct from fixture coverage. Grok was reconciled against retained local events, including copied history. OpenCode Go and the two retained non-Go OpenCode messages were reconciled against the local database; multi-route and legacy migration behavior also has fixture coverage. Hermes-sourced rows were reconciled against the agent's own ledger totals for both routes to the token, and the two ledgers were confirmed to share no session ids. Cursor's cloud parser has fixture coverage only: the sample's key set is a redacted shape capture and every value in it is synthetic, so no real event, id, or token is committed.
 
 A correction to the Hermes parser after its first release re-reads those rows once: the parser had added Hermes' reasoning count on top of output, which double counted because Hermes stores the provider's completion_tokens (reasoning is a subset there, unlike OpenCode's disjoint counter). It had also anchored each row at its last activity, which moved an accumulating total to a later day on every rescan and rewrote the daily history. Existing installs repair themselves on the next scan through a provenance version bump, which deletes and re-reads only the affected rows.
 
