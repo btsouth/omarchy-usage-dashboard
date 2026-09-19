@@ -56,6 +56,12 @@ class InstallationTests(unittest.TestCase):
             home=Path(tmp)/'home';home.mkdir()
             env=dict(os.environ,HOME=str(home),XDG_CONFIG_HOME=str(home/'config'),XDG_STATE_HOME=str(home/'state'),XDG_DATA_HOME=str(home/'data'))
             env=with_stub(env,home)
+            # The built-in widget's manifest lives under OMARCHY_PATH on a real
+            # install; stage a fixture copy so the check runs off this machine.
+            agents=home/'omarchy/shell/plugins/agents';agents.mkdir(parents=True)
+            (agents/'manifest.json').write_text(json.dumps(
+                {'id':'omarchy.agents','barWidget':{'aliases':['agents','model-usage']}}))
+            env['OMARCHY_PATH']=str(home/'omarchy')
             shell=home/'config/omarchy/shell.json';shell.parent.mkdir(parents=True)
             shell.write_text(json.dumps({'version':1,'bar':{'layout':{'right':[]}}}))
             def run(*args,check=True): return subprocess.run(['python3',str(ROOT/'install.py'),*args,'--no-systemd'],env=env,capture_output=True,text=True,check=check)

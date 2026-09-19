@@ -1,5 +1,7 @@
 # AI Usage Dashboard for Omarchy
 
+[![Checks](https://github.com/btsouth/omarchy-usage-dashboard/actions/workflows/check.yml/badge.svg)](https://github.com/btsouth/omarchy-usage-dashboard/actions/workflows/check.yml)
+
 Token trends, account comparisons, usage limits, estimated API value, and reset notifications for AI coding agents — all counted locally. Includes a bar widget with live limit meters that opens the full dashboard.
 
 ![Dashboard with generated example data](docs/dashboard.png)

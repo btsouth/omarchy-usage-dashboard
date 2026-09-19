@@ -40,7 +40,7 @@ def clashing_widgets(config):
         except (OSError, ValueError): continue
         widget=data.get('barWidget') or {}
         if 'model-usage' in (widget.get('aliases') or []): names.append(manifest.parent.name)
-    try: first=json.loads(Path('/usr/share/omarchy/shell/plugins/agents/manifest.json').read_text())
+    try: first=json.loads((Path(os.environ.get('OMARCHY_PATH', '/usr/share/omarchy'))/'shell/plugins/agents/manifest.json').read_text())
     except (OSError, ValueError): first={}
     if 'model-usage' in ((first.get('barWidget') or {}).get('aliases') or []):
         names.append('omarchy.agents (built-in)')
