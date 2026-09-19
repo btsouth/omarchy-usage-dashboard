@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 - 2026-09-19
 
 - Count Command Code's own sessions. The CommandCode route used to know only what the Hermes ledger recorded, so work driven through the Command Code CLI — whatever model it ran — never reached the dashboard, and the model list showed the tail of last night's Hermes sessions long after the day had moved on. The collector now reads Command Code's session transcripts the way it reads Claude Code's, per message with its own usage, skips the checkpoints mirrors, and prices the models through the same CommandCode rate table, so the provider card carries the whole account: Hermes routes, the CLI, and the agents that run through it.
 - Make the packaged widget the single, complete one. It carries the customizations the private `bts.agents` clone used to hold in code, moved into settings any install can set from its `bar.layout` entry: **providerOrder** walks the bar and panel in the order you list, **launchCommands** maps a provider to the CLI its right-click launches, **extraProviders** admits a record your own collector writes into the usage directory, and a provider set to `alwaysShow` stays on the bar before it has numbers. Fireworks keeps its place from the built-in widget, off by default. The installer names any other installed model-usage widget it finds, including the built-in Agents widget, so a second AI icon never appears by surprise. The CommandCode and ClinePass chips label themselves by name.
