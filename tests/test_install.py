@@ -51,6 +51,24 @@ class InstallationTests(unittest.TestCase):
             self.assertEqual(json.loads(prefs.read_text())['monthlyPrices']['codex'],200)
             self.assertEqual(json.loads(shell.read_text()),original)
 
+    def test_clash_warning_names_builtin_and_uninstall_removes_customized_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home=Path(tmp)/'home';home.mkdir()
+            env=dict(os.environ,HOME=str(home),XDG_CONFIG_HOME=str(home/'config'),XDG_STATE_HOME=str(home/'state'),XDG_DATA_HOME=str(home/'data'))
+            env=with_stub(env,home)
+            shell=home/'config/omarchy/shell.json';shell.parent.mkdir(parents=True)
+            shell.write_text(json.dumps({'version':1,'bar':{'layout':{'right':[]}}}))
+            def run(*args,check=True): return subprocess.run(['python3',str(ROOT/'install.py'),*args,'--no-systemd'],env=env,capture_output=True,text=True,check=check)
+            result=run('--with-plugin');self.assertEqual(result.returncode,0)
+            self.assertIn('omarchy.agents (built-in)',result.stdout)
+            # A user who followed the settings advice customized the entry;
+            # uninstall must still remove it by id.
+            layout=json.loads(shell.read_text())
+            layout['bar']['layout']['right'][0]['providerOrder']=['codex']
+            shell.write_text(json.dumps(layout))
+            run('--uninstall')
+            self.assertEqual(json.loads(shell.read_text())['bar']['layout']['right'],[])
+
     def test_dashboard_only_does_not_touch_bar(self):
         with tempfile.TemporaryDirectory() as tmp:
             env=dict(os.environ,HOME=tmp,XDG_CONFIG_HOME=tmp+'/config',XDG_STATE_HOME=tmp+'/state',XDG_DATA_HOME=tmp+'/data')

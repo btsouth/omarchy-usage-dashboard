@@ -33,15 +33,17 @@ def encode_exec(path, systemd=False):
 
 def clashing_widgets(config):
     """Installed plugins that claim the same bar aliases as this one."""
-    plugins_dir=config/'omarchy'/'plugins'
-    if not plugins_dir.is_dir(): return []
     names=[]
-    for manifest in sorted(plugins_dir.glob('*/manifest.json')):
+    for manifest in sorted(config.glob('omarchy/plugins/*/manifest.json')):
         if manifest.parent.name==PLUGIN: continue
         try: data=json.loads(manifest.read_text())
         except (OSError, ValueError): continue
         widget=data.get('barWidget') or {}
         if 'model-usage' in (widget.get('aliases') or []): names.append(manifest.parent.name)
+    try: first=json.loads(Path('/usr/share/omarchy/shell/plugins/agents/manifest.json').read_text())
+    except (OSError, ValueError): first={}
+    if 'model-usage' in ((first.get('barWidget') or {}).get('aliases') or []):
+        names.append('omarchy.agents (built-in)')
     return names
 
 def main():
@@ -64,8 +66,9 @@ def main():
         if managed['timer']: ctl('disable','--now',APP+'.timer')
         if managed['barEntry'] and shell_path.exists():
             shell=json.loads(shell_path.read_text())
+            entry_id=managed['barEntry'].get('id') if isinstance(managed['barEntry'],dict) else None
             for entries in shell.get('bar',{}).get('layout',{}).values():
-                if isinstance(entries,list): entries[:]=[e for e in entries if e!=managed['barEntry']]
+                if isinstance(entries,list): entries[:]=[e for e in entries if not (isinstance(e,dict) and e.get('id')==entry_id)]
             atomic(shell_path,(json.dumps(shell,indent=2)+'\n').encode())
         retained=[]
         for key,entry in list(managed['files'].items()):
