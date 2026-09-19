@@ -189,6 +189,8 @@ class ReviewTests(unittest.TestCase):
         rates['document']['opencode-go/priced'] = {'input_cost_per_token': 1, 'monthly_limit_usd': 100}
         with patch.object(c, 'load_rates', return_value=rates):
             report = c.report(ledger, cfg, now=now, selection={'account': 'work', 'project': '/a'})
+            other = c.report(ledger, cfg, now=now, provider='codex')
+        self.assertEqual(other['goAllowance']['models'], [])
         self.assertEqual(report['goAllowance']['models'][0]['value'], 10)
 
 

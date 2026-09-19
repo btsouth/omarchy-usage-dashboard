@@ -1768,7 +1768,7 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
     # windows, so value against each model's documented monthly limit is
     # estimated from local history during the current monthly reset window.
     go_allowance = {'since': None, 'models': []}
-    if 'opencode-go' in providers and 'opencode-go' not in excluded_sources:
+    if 'opencode-go' in providers and provider in ('all', 'opencode-go') and 'opencode-go' not in excluded_sources:
         monthly = next((limit for limit in quota('opencode-go').get('limits', []) if limit.get('label') == 'Monthly' and limit.get('resetsAt')), None)
         go_allowance['since'] = int(timestamp(monthly['resetsAt']) - 30 * 86400) if monthly else int(dt.datetime.combine(today.date().replace(day=1), dt.time()).timestamp())
         used = {}
