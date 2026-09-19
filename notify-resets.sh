@@ -10,7 +10,9 @@
 #     reset, or a surprise reset that re-anchors the window), or
 #   - a provider's banked reset credits (resetCreditsAvailable) increase,
 #     which is how Codex/Grok deliver dropped resets.
-# Session (5-hour) limits are ignored on purpose.
+# Short windows never notify: a label shaped in minutes or hours ("5h
+# window", "30m window", "5 hours") or named a session ("Session (5-hour)")
+# is excluded, so only weekly and monthly windows can alert.
 #
 # Alerts stay limited to the providers passed here -- codex and claude by
 # default. Adding a provider to the usage dashboard must not silently opt it
@@ -52,7 +54,7 @@ current=$(jq -s '
       | .id as $id | .name as $name
       | (.limits // [])[]
       | select(.resetsAt and .label)
-      | select(.label | test("session|5[- ]?hour"; "i") | not)
+      | select(.label | test("session|\\b[0-9]+\\s*-?\\s*h(our)?s?\\b|\\b[0-9]+\\s*-?\\s*m(in(ute)?s?)?\\b"; "i") | not)
       | { key: ($id + "|" + .label),
           value: {
             id: $id,

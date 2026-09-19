@@ -1,0 +1,53 @@
+import json
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+import unittest
+
+ROOT = Path(__file__).parents[1]
+NOTIFIER = ROOT / 'notify-resets.sh'
+
+INCLUDED = ['Weekly', 'Weekly (7-day)', 'Monthly']
+EXCLUDED = ['Session (5-hour)', '5 hours', '5h window', '30m window']
+
+
+class NotifyResetsTests(unittest.TestCase):
+    def run_notifier(self, state, *args):
+        stub = state / 'bin'
+        stub.mkdir(exist_ok=True)
+        calls = state / 'calls'
+        sender = stub / 'notify-send'
+        sender.write_text('#!/bin/bash\necho "$@" >> "$FAKE_LOG"\n')
+        sender.chmod(0o755)
+        env = dict(os.environ, XDG_STATE_HOME=str(state), FAKE_LOG=str(calls),
+                   PATH=str(stub) + os.pathsep + os.environ['PATH'])
+        for run in ('2026-09-19T10:00:00+00:00', '2026-09-19T15:00:01+00:00'):
+            percent = 0.9 if '10:00' in run else 0.1
+            (state / 'omarchy/agents/usage/p.json').write_text(json.dumps(
+                {'id': 'p', 'name': 'P', 'resetCreditsAvailable': 0,
+                 'limits': [{'label': self.label, 'percent': percent, 'resetsAt': run}]}))
+            result = subprocess.run(['bash', str(NOTIFIER), '--provider', 'p', *args],
+                                    env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0)
+        return calls.read_text() if calls.exists() else ''
+
+    def check(self, label, notified):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            (state / 'omarchy/agents/usage').mkdir(parents=True)
+            self.label = label
+            out = self.run_notifier(state)
+        self.assertEqual(bool(out.strip()), notified, label)
+
+    def test_long_windows_notify(self):
+        for label in INCLUDED:
+            self.check(label, True)
+
+    def test_short_windows_stay_silent(self):
+        for label in EXCLUDED:
+            self.check(label, False)
+
+
+if __name__ == '__main__':
+    unittest.main()
