@@ -1,6 +1,6 @@
 # AI Usage Dashboard for Omarchy
 
-Token trends, account comparisons, usage limits, and estimated API value for AI coding agents. Includes a bar widget that opens the full dashboard.
+Token trends, account comparisons, usage limits, estimated API value, and reset notifications for AI coding agents — all counted locally. Includes a bar widget with live limit meters that opens the full dashboard.
 
 ![Dashboard with generated example data](docs/dashboard.png)
 
@@ -28,7 +28,7 @@ Open the new bar widget and click **Open analytics**, or search for **AI Usage D
 
 The installer adds **AI Usage Dashboard** alongside Omarchy's built-in **Agents** widget. It does not automatically replace it, and it says so when another installed widget serves the same job, naming the plugin it found.
 
-For a single AI icon, remove the old Agents widget from your bar layout after installing. Keep the new AI Usage Dashboard widget: it covers Codex, Claude, and Fireworks like the built-in one, and adds the providers, ordering, launch commands, and notifications described below. Omarchy's packaged files are unchanged, and you can add the original widget back later.
+For a single AI icon, remove the old Agents widget from your bar layout after installing. Keep the new AI Usage Dashboard widget: it covers Codex, Claude, and Fireworks like the built-in one (Fireworks starts off; enable it in Settings), and adds the providers, ordering, launch commands, and notifications described below. Omarchy's packaged files are unchanged, and you can add the original widget back later.
 
 If the new widget does not appear, run:
 
