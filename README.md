@@ -14,7 +14,7 @@ Requires Omarchy 4 with Quickshell, Python 3.11+, and a systemd user session. Ol
 curl -fsSL https://raw.githubusercontent.com/btsouth/omarchy-usage-dashboard/main/install.sh | bash -s -- --with-plugin
 ```
 
-Drop `--with-plugin` for the dashboard without the bar widget. Pin a release with `OMARCHY_USAGE_REF=v1.3.0` in front of the command. Installing from a checkout also works:
+Drop `--with-plugin` for the dashboard without the bar widget. Pin a release with `OMARCHY_USAGE_REF=v1.4.0` in front of the command. Installing from a checkout also works:
 
 ```sh
 git clone https://github.com/btsouth/omarchy-usage-dashboard.git
@@ -26,9 +26,9 @@ Open the new bar widget and click **Open analytics**, or search for **AI Usage D
 
 ### Using it instead of the built-in widget
 
-The installer adds **AI Usage Dashboard** alongside Omarchy's built-in **Agents** widget. It does not automatically replace it.
+The installer adds **AI Usage Dashboard** alongside Omarchy's built-in **Agents** widget. It does not automatically replace it, and it says so when another installed widget serves the same job, naming the plugin it found.
 
-For a single AI icon, remove the old Agents widget from your bar layout after installing. Keep the new AI Usage Dashboard widget. Omarchy's packaged files are unchanged, and you can add the original widget back later.
+For a single AI icon, remove the old Agents widget from your bar layout after installing. Keep the new AI Usage Dashboard widget: it shows everything the built-in one does for Codex and Claude, and adds the providers, ordering, launch commands, and notifications described below. Omarchy's packaged files are unchanged, and you can add the original widget back later.
 
 If the new widget does not appear, run:
 
@@ -56,6 +56,33 @@ Both install options run without sudo and keep working if you move or delete the
 - Named accounts with multiple history folders and deduplication of copied records.
 - Synced machine ledgers: one shared folder, with each machine importing the others so all stats appear in one dashboard.
 - Available usage limits, optional monthly plan comparisons, and Omarchy theme colors.
+- Desktop notifications when a weekly or monthly limit resets or banked reset credits arrive, with the provider's own mark on the popup.
+- A bar widget that reorders providers, launches each agent's own CLI on right-click, and admits extra providers of your own.
+
+## Bar widget settings
+
+The widget reads its settings from its entry in `bar.layout` in `~/.config/omarchy/shell.json`, alongside the settings panel's own keys:
+
+```json
+{
+  "id": "community.ai-usage-dashboard",
+  "providerOrder": ["codex", "commandcode", "clinepass"],
+  "extraProviders": ["codex-second"],
+  "launchCommands": { "codex": "codex", "commandcode": "command-code" }
+}
+```
+
+- **providerOrder** sets the order the bar and panel walk providers in. Ids not listed follow alphabetically, so an agent nobody listed still appears.
+- **extraProviders** admits providers the dashboard does not collect itself. Write an upstream-format record named `<id>.json` into `~/.local/state/omarchy/agents/usage/` — the same directory Omarchy's collectors use — and the widget picks it up, with the record's own `name` as its label. Whoever writes the record owns the collecting.
+- **launchCommands** maps a provider id to the command right-click launches in a terminal. Providers without an entry fall back to Omarchy's agent picker.
+
+## Reset notifications
+
+After every refresh, the dashboard compares each provider's limits against the previous run and sends a desktop notification when a weekly or monthly window resets — or when banked reset credits arrive, which is how Codex delivers dropped resets. Session windows never notify. Alerts cover Codex and Claude by default; adding a provider to the dashboard never silently opts it in. Extend the list by running the notifier yourself with more providers:
+
+```sh
+~/.local/bin/omarchy-usage-dashboard-notify-resets --provider ollama-cloud
+```
 
 ## Supported sources
 

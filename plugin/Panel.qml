@@ -88,7 +88,26 @@ Panel {
     usage.refreshAll(true)
   }
 
+  // Right-click launches the selected agent's own CLI when a launch command
+  // is mapped for it in settings:
+  //   "launchCommands": { "codex": "codex", "commandcode": "command-code" }
+  // Anything else (an API-only agent, or one installed after the map was
+  // written) falls back to omarchy-agent's own picker rather than being sent
+  // to whichever CLI happened to be the default.
+  function launchCommandFor(providerId) {
+    var map = usage.setting("launchCommands", {})
+    return map && map[providerId] ? String(map[providerId]) : ""
+  }
+
   function launchAgent() {
+    if (root.bar && root.provider) {
+      var command = launchCommandFor(root.provider.providerId)
+      if (command !== "") {
+        root.bar.run("omarchy launch terminal " + command)
+        root.close()
+        return
+      }
+    }
     if (root.bar) root.bar.run("omarchy-agent --pick")
     root.close()
   }
@@ -533,7 +552,7 @@ Panel {
                 required property int index
 
                 text: ({"codex": "Main", "codex-second": "Second", "opencode-go": "OpenCode",
-                        "ollama-cloud": "Ollama"})[modelData.providerId] || modelData.providerName
+                        "ollama-cloud": "Ollama", "commandcode": "CommandCode", "clinepass": "ClinePass"})[modelData.providerId] || modelData.providerName
                 selected: index === root.providerIndex
                 hasCursor: root.cursorActive && index === root.providerIndex
                 bordered: true

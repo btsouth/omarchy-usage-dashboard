@@ -15,6 +15,7 @@ The installer runs without sudo. It checks all tracked destinations before chang
 | Installed application | `~/.local/share/omarchy-usage-dashboard/app` |
 | Launcher | `~/.local/bin/omarchy-usage-dashboard` |
 | Refresh wrapper | `~/.local/bin/omarchy-usage-dashboard-refresh` |
+| Reset notifier | `~/.local/bin/omarchy-usage-dashboard-notify-resets` |
 | Desktop entry | `~/.local/share/applications/omarchy-usage-dashboard.desktop` |
 | Optional plugin | `~/.config/omarchy/plugins/community.ai-usage-dashboard` |
 | Refresh timer/service | `~/.config/systemd/user/omarchy-usage-dashboard.{timer,service}` |

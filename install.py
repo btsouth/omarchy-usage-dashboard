@@ -31,6 +31,19 @@ def encode_exec(path, systemd=False):
     if systemd: return value.replace('%','%%').replace('$','$$')
     return value.replace('`','\\`').replace('$','\\$').replace('%','%%')
 
+def clashing_widgets(config):
+    """Installed plugins that claim the same bar aliases as this one."""
+    plugins_dir=config/'omarchy'/'plugins'
+    if not plugins_dir.is_dir(): return []
+    names=[]
+    for manifest in sorted(plugins_dir.glob('*/manifest.json')):
+        if manifest.parent.name==PLUGIN: continue
+        try: data=json.loads(manifest.read_text())
+        except (OSError, ValueError): continue
+        widget=data.get('barWidget') or {}
+        if 'model-usage' in (widget.get('aliases') or []): names.append(manifest.parent.name)
+    return names
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--with-plugin', action='store_true', help='install and add a separate bar widget; preserve existing widgets')
@@ -82,15 +95,15 @@ def main():
         if not shutil.which(command): parser.error('Missing dependency: '+command)
     plan={}
     def add(path,content,mode=0o644): plan[path]=(content.encode() if isinstance(content,str) else content,mode)
-    for name in ['collector.py','catalog.json','pricing.json','muse-pricing.json','codex-pricing.json','ollama-pricing.json','commandcode-pricing.json','clinepass-pricing.json','launch.sh','refresh.sh','LICENSE']:
+    for name in ['collector.py','catalog.json','pricing.json','muse-pricing.json','codex-pricing.json','ollama-pricing.json','commandcode-pricing.json','clinepass-pricing.json','launch.sh','refresh.sh','notify-resets.sh','LICENSE']:
         add(runtime/name,(ROOT/name).read_bytes(),0o755 if name.endswith('.sh') else 0o644)
     for folder in ['ui','licenses']:
         for source in (ROOT/folder).rglob('*'):
             if source.is_file(): add(runtime/source.relative_to(ROOT),source.read_bytes())
-    for name,script in [(APP,'launch.sh'),(APP+'-refresh','refresh.sh')]:
+    for name,script in [(APP,'launch.sh'),(APP+'-refresh','refresh.sh'),(APP+'-notify-resets','notify-resets.sh')]:
         add(home/'.local/bin'/name,'#!/bin/bash\nexec '+shlex.quote(str(runtime/script))+' "$@"\n',0o755)
     add(data/'applications'/f'{APP}.desktop','[Desktop Entry]\nType=Application\nName=AI Usage Dashboard\nComment=Local coding-agent token history and comparisons\nExec="'+encode_exec(home/'.local/bin'/APP)+'"\nIcon=utilities-system-monitor\nTerminal=false\nCategories=Utility;\n')
-    add(config/'systemd/user'/f'{APP}.service','[Unit]\nDescription=Refresh AI Usage Dashboard\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 "'+encode_exec(runtime/'collector.py',True)+'" scan\n')
+    add(config/'systemd/user'/f'{APP}.service','[Unit]\nDescription=Refresh AI Usage Dashboard\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 "'+encode_exec(runtime/'collector.py',True)+'" scan\nExecStartPost='+encode_exec(runtime/'notify-resets.sh',True)+'\n')
     add(config/'systemd/user'/f'{APP}.timer','[Unit]\nDescription=Refresh AI Usage Dashboard every 15 minutes\n[Timer]\nOnStartupSec=2min\nOnUnitActiveSec=15min\nPersistent=true\n[Install]\nWantedBy=timers.target\n')
     shell=None;bar_entry=None
     if args.with_plugin:
@@ -122,6 +135,14 @@ def main():
     if bar_entry: atomic(shell_path,(json.dumps(shell,indent=2)+'\n').encode())
     ctl('daemon-reload');ctl('enable','--now',APP+'.timer')
     print('Installed AI Usage Dashboard. Run:',home/'.local/bin'/APP)
-    if args.with_plugin: print('Added a separate bar widget. Existing widgets and provider settings were preserved.')
+    if args.with_plugin:
+        print('Added a separate bar widget. Existing widgets and provider settings were preserved.')
+        clashing=clashing_widgets(config)
+        if clashing:
+            print()
+            print('These installed widgets also serve model usage and will show a second AI icon:')
+            for name in clashing: print('  '+name)
+            print('Remove them from your bar layout once this widget is in place. Settings you')
+            print('customised there can be copied into the '+PLUGIN+' entry in shell.json.')
 
 if __name__=='__main__': main()

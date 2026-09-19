@@ -1,0 +1,125 @@
+#!/bin/bash
+
+# Notify on weekly/monthly limit resets in the agent usage records.
+#
+# Ships with the dashboard and rides every refresh path: the systemd service
+# runs it after each successful scan, and refresh.sh runs it after a panel
+# refresh. It compares the records in the usage dir against a snapshot from
+# the previous run and sends a desktop notification when either:
+#   - a limit's resetsAt jumps forward by more than an hour (scheduled weekly
+#     reset, or a surprise reset that re-anchors the window), or
+#   - a provider's banked reset credits (resetCreditsAvailable) increase,
+#     which is how Codex/Grok deliver dropped resets.
+# Session (5-hour) limits are ignored on purpose.
+#
+# Alerts stay limited to the providers passed here -- codex and claude by
+# default. Adding a provider to the usage dashboard must not silently opt it
+# into notifications; pass --provider <id> to watch more.
+
+set -uo pipefail
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/agents"
+USAGE_DIR="$STATE_DIR/usage"
+SNAP="$STATE_DIR/reset-snapshot.json"
+
+PROVIDERS=(codex claude)
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  --provider)
+    [[ -n ${2:-} ]] || { echo "omarchy-usage-notify-resets: --provider needs an id" >&2; exit 2; }
+    PROVIDERS+=("$2")
+    shift 2
+    ;;
+  *)
+    echo "omarchy-usage-notify-resets: unknown argument: $1" >&2
+    exit 2
+    ;;
+  esac
+done
+
+shopt -s nullglob
+files=()
+for agent in "${PROVIDERS[@]}"; do
+  [[ ! -f "$USAGE_DIR/$agent.json" ]] || files+=("$USAGE_DIR/$agent.json")
+done
+((${#files[@]})) || exit 0
+
+# Timestamps are normalized here (fractional seconds stripped, +00:00 -> Z) so
+# snapshot comparisons are jitter-free and fromdate can parse them.
+current=$(jq -s '
+  {
+    limits: ([ .[]
+      | .id as $id | .name as $name
+      | (.limits // [])[]
+      | select(.resetsAt and .label)
+      | select(.label | test("session|5[- ]?hour"; "i") | not)
+      | { key: ($id + "|" + .label),
+          value: {
+            id: $id,
+            name: $name,
+            label: .label,
+            percent: (.percent // 0),
+            resetsAt: (.resetsAt | sub("[.][0-9]+"; "") | sub("\\+00:00$"; "Z"))
+          } }
+    ] | from_entries),
+    credits: ([ .[]
+      | select(.resetCreditsAvailable != null)
+      | { key: .id, value: { id: .id, name: .name, credits: .resetCreditsAvailable } }
+    ] | from_entries)
+  }' "${files[@]}") || exit 0
+
+# The popup carries the provider's own mark. The installed plugin ships
+# assets for the dashboard's providers; the shell's first-party agents plugin
+# covers the rest. A provider found in neither goes out without an image.
+icon_for() {
+  local id="$1" dir
+  for dir in "$HOME/.config/omarchy/plugins/community.ai-usage-dashboard/assets" \
+    "${OMARCHY_PATH:-/usr/share/omarchy}/shell/plugins/agents/assets"; do
+    [[ -f "$dir/$id.svg" ]] && { printf '%s\n' "$dir/$id.svg"; return 0; }
+  done
+  return 1
+}
+
+if [[ -s $SNAP ]]; then
+  events=$(jq -rn --slurpfile snapw "$SNAP" --argjson new "$current" '
+    def epoch: try fromdate catch null;
+    ($snapw[0] // { limits: {}, credits: {} }) as $old
+    | ([ $new.limits | to_entries[]
+        | . as $e
+        | ($old.limits[$e.key] // null) as $prev
+        | select($prev != null)
+        | (($e.value.resetsAt | epoch) // empty) as $newT
+        | (($prev.resetsAt | epoch) // empty) as $oldT
+        | select($newT - $oldT > 3600)
+        | { id: $e.value.id, name: $e.value.name,
+            line: "\($e.value.label): was \(($prev.percent * 100) | round)%, now \(($e.value.percent * 100) | round)%" }
+      ]) as $limitEvents
+    | ([ $new.credits | to_entries[]
+        | . as $e
+        | ($old.credits[$e.key] // null) as $prev
+        | select($prev != null and $e.value.credits > $prev.credits)
+        | { id: $e.value.id, name: $e.value.name,
+            line: "Banked resets: \($prev.credits) -> \($e.value.credits)" }
+      ]) as $creditEvents
+    | ($limitEvents + $creditEvents)
+    | group_by(.id)
+    | map({ id: .[0].id, name: .[0].name, body: (map(.line) | join("\n")) })
+    | .[] | [.id, .name, .body] | @tsv
+  ' 2>/dev/null)
+
+  while IFS=$'\t' read -r id name body; do
+    [[ -n $id ]] || continue
+    args=(-a "AI Usage" -u normal)
+    if icon=$(icon_for "$id"); then
+      # file:// makes the shell's daemon ingest the svg as the popup image;
+      # a bare path lands in appIcon and renders nothing.
+      args+=(-i "file://$icon")
+    fi
+    notify-send "${args[@]}" "$name limit reset" "$(printf '%b' "$body")" || true
+  done <<<"$events"
+fi
+
+tmp=$(mktemp "$STATE_DIR/.reset-snapshot.XXXXXX") || exit 0
+printf '%s\n' "$current" >"$tmp"
+chmod 600 "$tmp"
+mv "$tmp" "$SNAP"

@@ -18,8 +18,27 @@ Item {
   // ------------------------------------------------------------- discovery
 
   property var agentIds: []
+  property var discoveredIds: []
   property var agents: []
   property int dataRevision: 0
+
+  // The order the panel and the bar cycle walk agents in, set on this widget
+  // in shell.json:
+  //   "providerOrder": ["codex", "commandcode", "clinepass"]
+  // Ids not named here follow alphabetically, so an agent nobody listed still
+  // appears instead of dropping off the end.
+  //
+  // A settings array arrives as a QVariantList, which Array.isArray rejects,
+  // so this walks it by length the way the rest of the shell reads settings.
+  property var providerOrder: {
+    var configured = setting("providerOrder", [])
+    var ids = []
+    if (configured && typeof configured.length === "number") {
+      for (var i = 0; i < configured.length; i++) ids.push(String(configured[i]))
+    }
+    return ids
+  }
+  onProviderOrderChanged: applyProviderOrder()
 
   Process {
     id: listProcess
@@ -44,9 +63,25 @@ Item {
       if (name.slice(-5) === ".json") ids.push(name.slice(0, -5))
     }
     ids.sort()
+    // Sorted first so the order the directory happened to hand the ids over
+    // in never reaches the panel; providerOrder reorders from here.
     // Same list, same objects: reassigning the model would tear down every
     // FileView just to build identical ones.
-    if (JSON.stringify(ids) !== JSON.stringify(agentIds)) agentIds = ids
+    if (JSON.stringify(ids) === JSON.stringify(discoveredIds)) return
+    discoveredIds = ids
+    applyProviderOrder()
+  }
+
+  function applyProviderOrder() {
+    var rank = {}
+    for (var i = 0; i < providerOrder.length; i++) rank[providerOrder[i]] = i
+    var ordered = discoveredIds.slice().sort(function(a, b) {
+      var ra = rank[a] === undefined ? providerOrder.length : rank[a]
+      var rb = rank[b] === undefined ? providerOrder.length : rank[b]
+      if (ra !== rb) return ra - rb
+      return a < b ? -1 : (a > b ? 1 : 0)
+    })
+    if (JSON.stringify(ordered) !== JSON.stringify(agentIds)) agentIds = ordered
   }
 
   Instantiator {
@@ -195,7 +230,7 @@ Item {
       localIds[id] = true
       if (!providerEnabled(id)) continue
       var display = displayProvider(record)
-      if (providerHasData(display)) result.push(display)
+      if (providerHasData(display) || (settings && settings.providers && settings.providers[id] && settings.providers[id].alwaysShow)) result.push(display)
     }
     // An agent that only ever ran on another machine has no local record, but
     // its synced numbers still deserve a tab. Rate limits stay blank — they
@@ -211,9 +246,25 @@ Item {
   }
 
   function providerEnabled(id) {
-    if (["codex", "claude", "opencode-go", "grok", "gemini", "opencode", "pi", "omp", "muse", "ollama-cloud", "commandcode", "clinepass"].indexOf(id) < 0) return false
+    if (!isKnownProvider(id)) return false
     if (!settings || !settings.providers || !settings.providers[id]) return true
     return settings.providers[id].enabled !== false
+  }
+
+  // Providers the dashboard itself collects are named here. extraProviders
+  // admits ids a user's own collector writes into the same directory: an
+  // upstream-format record is the whole contract, and whoever writes it owns
+  // the collecting. Set it on this widget in shell.json:
+  //   "extraProviders": ["codex-second"]
+  function isKnownProvider(id) {
+    if (["codex", "claude", "opencode-go", "grok", "gemini", "opencode", "pi", "omp", "muse", "ollama-cloud", "commandcode", "clinepass"].indexOf(id) >= 0) return true
+    var extra = setting("extraProviders", [])
+    if (extra && typeof extra.length === "number") {
+      for (var i = 0; i < extra.length; i++) {
+        if (String(extra[i]) === id) return true
+      }
+    }
+    return false
   }
 
   // All-time keeps a quiet day from hiding an agent; today's counts admit a
