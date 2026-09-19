@@ -21,7 +21,9 @@ class RefreshTests(unittest.TestCase):
             updater = bin / 'omarchy-agent-usage-update'
             updater.write_text('#!/bin/bash\necho "$@" >> "$CAPTURE"\nexit 3\n')
             updater.chmod(0o755)
-            env = dict(os.environ, PATH=str(bin) + ':/usr/bin:/bin', CAPTURE=str(capture))
+            env = dict(os.environ, PATH=str(bin) + ':/usr/bin:/bin', CAPTURE=str(capture),
+                       HOME=str(tmp), XDG_CONFIG_HOME=str(tmp / 'config'),
+                       XDG_STATE_HOME=str(tmp / 'state'), XDG_DATA_HOME=str(tmp / 'data'))
             result = subprocess.run(['bash', str(REFRESH), *args],
                                     env=env, capture_output=True, text=True)
             forwarded = capture.read_text().strip() if capture.exists() else ''
