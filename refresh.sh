@@ -8,11 +8,14 @@ done
 # Native quota records are maintained by Omarchy; Go is collected below.
 # A machine with its own refresh orchestrator (one that routes custom
 # collectors and keeps each record written by exactly one writer) takes
-# precedence; the packaged updater covers everyone else.
+# precedence; the packaged updater covers everyone else. The panel passes
+# --limits-only, --except, and agent ids through here, so forward the whole
+# list: the updater understands all of them, and unknown agent ids simply
+# match no collector. The dashboard collector below only knows --force.
 if command -v omarchy-agent-usage-refresh >/dev/null 2>&1; then
-  timeout 60 omarchy-agent-usage-refresh --limits-only "${force[@]}" --except grok --except cursor --except fireworks || true
+  timeout 60 omarchy-agent-usage-refresh "$@" || true
 elif command -v omarchy-agent-usage-update >/dev/null 2>&1; then
-  timeout 60 omarchy-agent-usage-update --limits-only "${force[@]}" --except grok --except cursor --except fireworks || true
+  timeout 60 omarchy-agent-usage-update "$@" || true
 fi
 status=0
 python3 "$project_dir/collector.py" scan "${force[@]}" || status=$?
