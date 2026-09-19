@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.5.0 - 2026-09-19
 
 - Cursor usage: cloud usage events, per model, carrying the input, output, and cache-read tokens each one spent and its list-price cost, plus a billing-cycle quota meter with its reset date. Cursor is the first source here that cannot be rebuilt from local files, so it is read from Cursor's own API using the session the desktop app already stores locally; that token is never copied, logged, or sent anywhere but Cursor. Event costs are list prices and plan discounts are not applied per event, so the quota card's billed total is the figure to trust where the two disagree.
 - Check for a clashing built-in widget off the machine's own Omarchy path. The installer read `/usr/share/omarchy` directly — a path that exists on the machine this was developed on and nowhere else — so the check passed there and went red the moment it ran anywhere else. It now follows the `OMARCHY_PATH` convention `refresh.sh` already uses, and its test stages a fixture manifest instead of reaching for the host's.
