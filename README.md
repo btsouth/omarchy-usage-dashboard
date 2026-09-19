@@ -75,6 +75,7 @@ The widget reads its settings from its entry in `bar.layout` in `~/.config/omarc
 - **providerOrder** sets the order the bar and panel walk providers in. Ids not listed follow alphabetically, so an agent nobody listed still appears.
 - **extraProviders** admits providers the dashboard does not collect itself. Write an upstream-format record named `<id>.json` into `~/.local/state/omarchy/agents/usage/` — the same directory Omarchy's collectors use — and the widget picks it up, with the record's own `name` as its label. Whoever writes the record owns the collecting.
 - **launchCommands** maps a provider id to the command right-click launches in a terminal. Providers without an entry fall back to Omarchy's agent picker.
+- **alwaysShow** keeps a provider on the bar before it has numbers. Unlike the keys above it lives in the settings panel's own map, per provider: `settings.providers.<id>.alwaysShow`, not a top-level key.
 
 ## Reset notifications
 

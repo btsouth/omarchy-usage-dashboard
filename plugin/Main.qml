@@ -240,7 +240,7 @@ Item {
       if (localIds[syncedId] || !providerEnabled(syncedId)) continue
       var stats = syncedProviders[syncedId] || {}
       var syncedDisplay = displayProvider({ id: syncedId, name: stats.providerName || syncedId })
-      if (providerHasData(syncedDisplay)) result.push(syncedDisplay)
+      if (providerHasData(syncedDisplay) || (settings && settings.providers && settings.providers[syncedId] && settings.providers[syncedId].alwaysShow)) result.push(syncedDisplay)
     }
     return result
   }
