@@ -83,3 +83,83 @@ class InstallationTests(unittest.TestCase):
             self.assertFalse(Path(tmp,'config/omarchy/shell.json').exists())
             subprocess.run(['python3',str(ROOT/'install.py'),'--uninstall','--no-systemd'],env=env,capture_output=True,check=True)
             self.assertFalse(Path(tmp,'data',APP,'app').exists())
+
+class RecoveryTests(unittest.TestCase):
+    def test_interrupted_upgrade_can_retry_without_losing_originals(self):
+        import importlib.util
+        from unittest.mock import patch
+        spec=importlib.util.spec_from_file_location('review_install',ROOT/'install.py')
+        installer=importlib.util.module_from_spec(spec);spec.loader.exec_module(installer)
+        with tempfile.TemporaryDirectory() as tmp:
+            home=Path(tmp)
+            env=with_stub(dict(os.environ,HOME=tmp,XDG_CONFIG_HOME=tmp+'/config',
+                              XDG_STATE_HOME=tmp+'/state',XDG_DATA_HOME=tmp+'/data'),home)
+            with patch.dict(os.environ,env), patch('sys.argv',['install.py','--no-systemd']):
+                installer.main()
+                runtime=home/'data'/APP/'app'
+                registry=home/'state'/APP/'installation.json'
+                managed=json.loads(registry.read_text())
+                # Model a previous release whose first two files both changed.
+                for name in ('collector.py','catalog.json'):
+                    path=runtime/name;path.write_bytes(b'old release')
+                    managed['files'][str(path)]['hash']=installer.digest(path.read_bytes())
+                registry.write_text(json.dumps(managed))
+                real_atomic=installer.atomic
+                def interrupted(path,*args,**kwargs):
+                    if path==runtime/'catalog.json': raise OSError('simulated disk failure')
+                    return real_atomic(path,*args,**kwargs)
+                with patch.object(installer,'atomic',interrupted):
+                    with self.assertRaises(OSError): installer.main()
+                self.assertEqual((runtime/'catalog.json').read_bytes(),b'old release')
+                self.assertEqual((runtime/'collector.py').read_bytes(),(ROOT/'collector.py').read_bytes())
+                installer.main()
+                self.assertEqual((runtime/'catalog.json').read_bytes(),(ROOT/'catalog.json').read_bytes())
+                self.assertTrue(all('pendingHash' not in e for e in json.loads(registry.read_text())['files'].values()))
+            with patch.dict(os.environ,env), patch('sys.argv',['install.py','--no-systemd','--uninstall']):
+                installer.main()
+            self.assertFalse(runtime.exists())
+
+    def test_archive_installer_cleans_extracted_files(self):
+        import tarfile
+        with tempfile.TemporaryDirectory() as tmp:
+            home=Path(tmp)/'home';home.mkdir()
+            work=Path(tmp)/'work';work.mkdir()
+            env=with_stub(dict(os.environ,HOME=str(home),XDG_CONFIG_HOME=str(home/'config'),
+                              XDG_STATE_HOME=str(home/'state'),XDG_DATA_HOME=str(home/'data'),TMPDIR=str(work)),home)
+            archive=Path(tmp)/'source.tar.gz'
+            with tarfile.open(archive,'w:gz') as tar:
+                for source in ROOT.iterdir():
+                    if source.suffix in ('.py','.json','.sh') or source.name in ('LICENSE','ui','plugin','licenses'):
+                        tar.add(source,arcname='source/'+source.name)
+            env['OMARCHY_USAGE_TARBALL']=str(archive)
+            subprocess.run(['bash',str(ROOT/'install.sh'),'--no-systemd'],env=env,check=True,capture_output=True)
+            self.assertEqual(list(work.iterdir()),[])
+            self.assertTrue((home/'.local/bin'/APP).exists())
+
+    def test_installed_refresh_report_repeat_and_uninstall(self):
+        import datetime as dt
+        with tempfile.TemporaryDirectory() as tmp:
+            home=Path(tmp)
+            env=dict(os.environ,HOME=tmp,AI_USAGE_DEMO='',OLLAMA_API_KEY='',COMMANDCODE_API_KEY='',CLINE_API_KEY='')
+            env.update({key:str(home/key.lower()) for key in (
+                'XDG_CONFIG_HOME','XDG_STATE_HOME','XDG_DATA_HOME','CODEX_HOME','CLAUDE_CONFIG_DIR',
+                'GROK_HOME','PI_CODING_AGENT_DIR','MUSE_HOME','CURSOR_HOME')})
+            env=with_stub(env,home)
+            env['PATH']=str(home/'.local/bin')+os.pathsep+env['PATH']
+            for name in ('omarchy-agent-usage-refresh','omarchy-agent-usage-update','notify-send'):
+                stub=home/'test-bin'/name;stub.write_text('#!/bin/sh\nexit 0\n');stub.chmod(0o755)
+            source=Path(env['CODEX_HOME'])/'sessions/fixture.jsonl';source.parent.mkdir(parents=True)
+            source.write_text(json.dumps({'type':'event_msg','timestamp':dt.datetime.now(dt.timezone.utc).isoformat(),
+                'payload':{'type':'token_count','info':{'last_token_usage':{'input_tokens':100,'cached_input_tokens':70,'output_tokens':20},
+                    'total_token_usage':{'input_tokens':100,'output_tokens':20}}}})+'\n')
+            subprocess.run(['python3',str(ROOT/'install.py'),'--with-plugin','--no-systemd'],env=env,check=True,capture_output=True)
+            runtime=Path(env['XDG_DATA_HOME'])/APP/'app'
+            for _ in range(2):
+                subprocess.run([str(home/'.local/bin'/f'{APP}-refresh'),'--force'],env=env,check=True,capture_output=True)
+                result=subprocess.run(['python3',str(runtime/'collector.py'),'report'],env=env,check=True,capture_output=True,text=True)
+                report=json.loads(result.stdout)
+                self.assertEqual(report['summary']['tokens'],120)
+                self.assertEqual(report['summary']['requests'],1)
+            subprocess.run(['python3',str(ROOT/'install.py'),'--uninstall','--no-systemd'],env=env,check=True,capture_output=True)
+            self.assertTrue((Path(env['XDG_STATE_HOME'])/'omarchy/ai-usage/usage.sqlite').exists())
+            self.assertFalse(runtime.exists())

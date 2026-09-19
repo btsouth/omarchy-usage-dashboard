@@ -1,6 +1,7 @@
 import datetime as dt
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -15,6 +16,13 @@ class AccountTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        for patcher in (patch.object(c, 'STATE', self.root / 'state'),
+                        patch.object(c, 'CONFIG', self.root / 'settings.json'),
+                        patch.object(c, 'HOME', self.root),
+                        patch.dict(os.environ, {key: str(self.root / key.lower()) for key in (
+                            'HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME',
+                            'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'GROK_HOME', 'PI_CODING_AGENT_DIR', 'MUSE_HOME', 'CURSOR_HOME')})):
+            patcher.start(); self.addCleanup(patcher.stop)
         self.ledger = c.Ledger(self.root / 'usage.sqlite')
         self.now = dt.datetime(2026, 9, 5, 18).astimezone()
         self.cfg = c.DEFAULTS | {'enabled': ['codex'], 'accounts': [

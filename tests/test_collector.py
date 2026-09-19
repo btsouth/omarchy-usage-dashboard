@@ -24,6 +24,10 @@ class CollectorTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        for patcher in (patch.object(c, 'HOME', self.root),
+                        patch.dict(os.environ, self.sandbox_env()),
+                        patch.object(c.urllib.request, 'urlopen', side_effect=AssertionError('Unexpected network in test'))):
+            patcher.start(); self.addCleanup(patcher.stop)
         # Every path the collector writes must resolve inside the fixture. A
         # test that reaches the real home would overwrite the user's settings.
         self.conf = patch.object(c, 'CONFIG', self.root / 'config/omarchy/ai-usage/settings.json')
@@ -669,7 +673,7 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(ledger.db.execute("SELECT COUNT(*) FROM events WHERE provider='cursor'").fetchone()[0], 1)
         ledger.db.close()
 
-    def test_cursor_resume_walks_past_stop_and_tops_up(self):
+    def test_cursor_resume_finishes_history_then_tops_up(self):
         first, _, twin = self.cursor_fixture()
         new = dict(first, timestamp='1788829289000', conversationId='new-conv')
         ledger = c.Ledger(self.root / 'resume.sqlite')
@@ -688,8 +692,10 @@ class CollectorTests(unittest.TestCase):
              patch.object(c, 'cursor_walk', fake_walk):
             (self.root / 'state').mkdir(parents=True, exist_ok=True)
             (self.root / 'state/cursor-usage.json').write_text(json.dumps(
-                {'attemptedAt': 0, 'billingCycleStart': 1786479485000, 'newestTs': 1788815371513,
+                {'historyVersion': 1, 'attemptedAt': 0, 'billingCycleStart': 1786479485000, 'newestTs': 1788815371513,
                  'fullPullPending': True, 'resumeFloorMs': 1788815371514, 'error': ''}))
+            source, warnings = c.cursor_usage(ledger, force=True)
+            self.assertEqual(warnings, [])
             source, warnings = c.cursor_usage(ledger, force=True)
         self.assertEqual(warnings, [])
         self.assertEqual(len(calls), 2)

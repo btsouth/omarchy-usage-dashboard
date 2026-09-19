@@ -24,4 +24,4 @@ else
   curl -fsSL "$url" | tar -xz -C "$work" --strip-components=1
 fi
 
-exec python3 "$work/install.py" "$@"
+python3 "$work/install.py" "$@"

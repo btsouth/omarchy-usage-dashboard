@@ -263,7 +263,7 @@ Scope {
         onStarted: { write(payload + "\n"); payload = "" }
         stdout: StdioCollector { onStreamFinished: { try { root.saveError = JSON.parse(text).error || "" } catch(e) {} } }
         onExited: function(code) {
-            if (code === 0) { root.settingsOpen = false; root.selection = ({}); root.navigation = []; root.provider = "all"; root.notice = "Settings saved"; root.refresh() }
+            if (code === 0) { root.settingsOpen = false; root.selection = ({}); root.navigation = []; root.provider = "all"; root.notice = "Settings saved"; root.refreshLive() }
             else root.notice = root.saveError || "Settings could not be saved."
         }
     }
@@ -436,10 +436,10 @@ Scope {
         implicitHeight: 900
         minimumSize: Qt.size(1000, 640)
         visible: true
-        Component.onCompleted: root.refresh()
+        Component.onCompleted: root.refreshLive()
         Shortcut { sequence: "Alt+Left"; onActivated: root.goBack() }
         Shortcut { sequence: "Ctrl+Q"; onActivated: Qt.quit() }
-        Shortcut { sequence: "Ctrl+R"; onActivated: root.refresh() }
+        Shortcut { sequence: "Ctrl+R"; onActivated: root.refreshLive() }
         Shortcut { sequence: "Escape"; onActivated: { if(root.settingsOpen) root.settingsOpen = false; else if(root.navigation.length) root.goBack(); else window.visible = false } }
         Rectangle {
             id: captureRoot
@@ -927,7 +927,7 @@ Scope {
                                 Sub { required property var modelData; width: coverageColumn.width; wrapMode: Text.WordWrap; text: modelData.provider+" / "+modelData.client+" · "+modelData.sessions+" sessions · latest event "+root.when(modelData.lastAt) }
                             }
                             Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.data ? "Pricing: "+root.data.pricing.source+(root.data.pricing.fetchedAtMs?" · "+Qt.formatDateTime(new Date(root.data.pricing.fetchedAtMs),"MMM d, yyyy"):"")+". Estimates use this catalog's rates, not historical billing rates." : "" }
-                            Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Grok, OpenCode, Pi, and Oh My Pi use recorded API estimates when available. Their recorded totals do not provide cache savings. Usage records are message snapshots or completed Grok turns, not equivalent request counts. Turns without detailed usage are excluded." }
+                            Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Grok, OpenCode, Pi, and Oh My Pi use recorded API estimates when available. Their recorded totals do not provide cache savings. Usage records are message snapshots, aggregated rows, or cloud events, not equivalent request counts. Cursor also retains events with zero reported tokens." }
                             Repeater {
                                 model: root.data ? root.data.pricing.unpriced || [] : []
                                 Sub { required property var modelData; width: coverageColumn.width; wrapMode: Text.WordWrap; text: modelData.provider+" / "+modelData.name+": "+root.compact(modelData.unpricedTokens)+" unpriced tokens" }

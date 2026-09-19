@@ -3,7 +3,7 @@
 import json, os, pathlib, shutil, subprocess, tempfile, time
 root=pathlib.Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix='usage-ui-qa-') as tmp:
- b=pathlib.Path(tmp); env=dict(os.environ, HOME=tmp,XDG_CONFIG_HOME=tmp+'/config',XDG_DATA_HOME=tmp+'/data',XDG_STATE_HOME=tmp+'/state',CODEX_HOME=tmp+'/codex',CLAUDE_CONFIG_DIR=tmp+'/claude',GROK_HOME=tmp+'/grok',PI_CODING_AGENT_DIR=tmp+'/pi',AI_USAGE_ROOT=str(root),AI_USAGE_DEMO='1',QT_QPA_PLATFORM='offscreen',QT_QUICK_BACKEND='software')
+ b=pathlib.Path(tmp); env=dict(os.environ, HOME=tmp,XDG_CONFIG_HOME=tmp+'/config',XDG_DATA_HOME=tmp+'/data',XDG_STATE_HOME=tmp+'/state',CODEX_HOME=tmp+'/codex',CLAUDE_CONFIG_DIR=tmp+'/claude',GROK_HOME=tmp+'/grok',PI_CODING_AGENT_DIR=tmp+'/pi',MUSE_HOME=tmp+'/muse',CURSOR_HOME=tmp+'/cursor',AI_USAGE_ROOT=str(root),AI_USAGE_DEMO='1',QT_QPA_PLATFORM='offscreen',QT_QUICK_BACKEND='software')
  shutil.copytree(root/'ui',b/'ui'); p=b/'ui/shell.qml'; q=p.read_text().replace('implicitWidth: 1200','implicitWidth: 1000').replace('implicitHeight: 900','implicitHeight: 640')
  q=q.replace('function quit(): void', '''function qaAdd(): void { root.openSettings(); root.draftAccounts=[{id:"qa",label:"QA",directories:[{provider:"codex",path:"/tmp/qa/.codex"}]}] }
         function qaSave(): void { root.saveSettings() }

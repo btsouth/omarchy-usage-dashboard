@@ -15,16 +15,21 @@ ROOT=Path(__file__).resolve().parent
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--view', choices=['overview', 'settings', 'accounts', 'today'], default='overview')
 parser.add_argument('--capture',type=Path,help='render a PNG offscreen and exit')
+parser.add_argument('--theme', choices=['dark', 'light'], default='dark', help='synthetic preview palette')
 parser.add_argument('--agents',help='comma-separated providers to enable, default all')
 args=parser.parse_args()
 with tempfile.TemporaryDirectory(prefix='usage-dashboard-demo-') as tmp:
     base=Path(tmp);env=dict(os.environ)
     env.update(HOME=tmp,XDG_STATE_HOME=str(base/'state'),XDG_CONFIG_HOME=str(base/'config'),
                XDG_DATA_HOME=str(base/'data'),CODEX_HOME=str(base/'codex'),CLAUDE_CONFIG_DIR=str(base/'claude'),GROK_HOME=str(base/'grok'),PI_CODING_AGENT_DIR=str(base/'pi'),
-               AI_USAGE_ROOT=str(ROOT),AI_USAGE_DEMO='1')
+               MUSE_HOME=str(base/'muse'),CURSOR_HOME=str(base/'cursor'),AI_USAGE_ROOT=str(ROOT),AI_USAGE_DEMO='1')
     if args.capture: env.update(QT_QPA_PLATFORM='offscreen',QT_QUICK_BACKEND='software')
     os.environ.update(env)
     spec=importlib.util.spec_from_file_location('demo_collector',ROOT/'collector.py');c=importlib.util.module_from_spec(spec);spec.loader.exec_module(c)
+    if args.theme == 'light':
+        theme = c.STATE.parent / 'current/theme/colors.toml'
+        theme.parent.mkdir(parents=True, exist_ok=True)
+        theme.write_text('background = "#faf7f0"\nforeground = "#292d32"\naccent = "#28654a"\nlighter_background = "#dce5df"\n')
     providers=[p for p in (args.agents.split(',') if args.agents else c.PROVIDERS) if p in c.PROVIDERS] or list(c.PROVIDERS)
     c.atomic_json(c.CONFIG, c.DEFAULTS | {'enabled': providers, 'accounts': [{'id':'work','label':'Work','directories':[{'provider':p,'path':str(base/'work'/p)} for p in providers]}]})
     ledger=c.Ledger(c.STATE/'usage.sqlite');rng=random.Random(7);now=dt.datetime.now().astimezone()
@@ -45,6 +50,8 @@ with tempfile.TemporaryDirectory(prefix='usage-dashboard-demo-') as tmp:
                 ledger.put(entry, base/('work' if index % 2 else 'local')/provider/'sessions/demo.jsonl')
     ledger.db.execute("UPDATE events SET reportedCostTicks=120000000,modelCalls=3 WHERE provider='grok'")
     ledger.db.execute("UPDATE events SET reportedValue=0.012,apiProvider='example-provider' WHERE provider IN ('opencode','pi','omp')")
+    ledger.db.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)', ('scan', json.dumps(
+        {'sources': [], 'warnings': [], 'scannedAt': time.time(), 'machine': 'demo-computer'})))
     ledger.db.commit();ledger.db.close()
     # Copy QML into an isolated path so IPC cannot target the real dashboard.
     import shutil
