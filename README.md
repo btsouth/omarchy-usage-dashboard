@@ -99,13 +99,15 @@ After every refresh, the dashboard compares each provider's limits against the p
 | OpenCode | Other model providers used through OpenCode | Not collected |
 | Pi / Oh My Pi | Saved assistant usage | Not collected |
 | Muse | Completed model responses, including subagents | From the existing Muse login |
-| Ollama Cloud | Hermes agent sessions and background work | From an Ollama Cloud API key |
-| CommandCode | Hermes agent sessions and Command Code CLI transcripts | From a CommandCode API key |
-| ClinePass | Hermes agent sessions | From a ClinePass API key |
+| Ollama Cloud | T3 Code, Hermes agent sessions, and background work | From an Ollama Cloud API key |
+| CommandCode | T3 Code, Hermes agent sessions, and Command Code CLI transcripts | From a CommandCode API key |
+| ClinePass | T3 Code and Hermes agent sessions | From a ClinePass API key |
 | Cursor | Cloud usage events (tokens and list-price cost per model) | Billing-cycle usage from your Cursor sign-in |
 | Hermes (OpenCode Go, Ollama Cloud, CommandCode, ClinePass) | Agent sessions, including background work | Not collected; adds to the cards for those routes |
 
 Sources with recorded history appear automatically on a fresh install. Use **Settings** to choose which ones to show. OpenCode Go uses your existing API key; no cookie setup is needed. If Grok authentication expires, run `grok login`. Ollama Cloud, CommandCode, and ClinePass may need a key: type it in **Settings**, export `OLLAMA_API_KEY` / `COMMANDCODE_API_KEY` / `CLINE_API_KEY`, or put it in `~/.config/omarchy/ai-usage/ollama.key` / `commandcode.key` / `clinepass.key` (the key file an Ollama CLI install would use is also read, if one exists).
+
+T3 Code's custom provider instances are discovered from `~/.t3/userdata/settings.json`. Their isolated Codex, Claude, and OpenCode histories are read in place, and a CommandCode runtime is attributed to the CommandCode card rather than to Codex.
 
 Hermes records its own per-route totals, and OpenCode Go reaches the same account through two apps now. Both are counted: OpenCode's transcripts carry the per-request detail from the OpenCode client, and Hermes sessions are added from its own ledger. The two share no session or message ids, so nothing is double counted, and the added total reconciles to the agent's own ledger exactly. Hermes rows can additionally be split by what they were for (typed prompts versus title generation, compression, vision, approvals, and background review) in the client breakdown.
 

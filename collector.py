@@ -53,6 +53,13 @@ OLLAMA_WINDOWS = {'session': 'Session (5-hour)', 'weekly': 'Weekly (7-day)', 'mo
 # prefix rule would also merge model families that only look alike.
 MODEL_FAMILIES = {'deepseek/deepseek-v4.1-flash': 'deepseek-v4.1-flash',
                   'cline-pass/deepseek-v4.1-flash': 'deepseek-v4.1-flash'}
+# T3 Code keeps each configured provider instance in settings.json. The
+# runtime homes are ordinary Codex, Claude, or OpenCode stores, but the app's
+# provider name is what identifies the account and pricing route.
+T3_DRIVERS = {'codex': 'codex', 'claudeagent': 'claude', 'claude': 'claude', 'opencode': 'opencode'}
+CODEX_ROUTE_PROVIDERS = {'commandcode': 'commandcode'}
+OPENCODE_ROUTE_PROVIDERS = {'opencodego': 'opencode-go', 'clinepass': 'clinepass',
+                            'ollamacloud': 'ollama-cloud'}
 
 
 def model_family(name):
@@ -96,6 +103,53 @@ def atomic_json(path, value):
 def settings():
     try: return DEFAULTS | json.loads(CONFIG.read_text())
     except (OSError, ValueError): return dict(DEFAULTS)
+
+
+def provider_key(value):
+    return ''.join(c for c in str(value or '').casefold() if c.isalnum())
+
+
+def t3_provider_instances():
+    """Enabled T3 Code runtime roots and the dashboard route each one uses.
+
+    T3 stores custom provider homes in its own settings file. Reading the
+    selected paths keeps those isolated runtimes visible without copying or
+    exposing the credentials stored beside them.
+    """
+    path = HOME / '.t3/userdata/settings.json'
+    try: data = json.loads(path.read_text())
+    except (OSError, ValueError): return []
+    instances = data.get('providerInstances') if isinstance(data, dict) else None
+    if not isinstance(instances, dict): return []
+    found, seen = [], set()
+    for instance_id, instance in instances.items():
+        if not isinstance(instance, dict) or instance.get('enabled') is False: continue
+        driver = T3_DRIVERS.get(provider_key(instance.get('driver')))
+        if not driver: continue
+        config = instance.get('config') if isinstance(instance.get('config'), dict) else {}
+        identity = provider_key(str(instance_id) + ' ' + str(instance.get('displayName') or ''))
+        provider = driver
+        if 'commandcode' in identity: provider = 'commandcode'
+        elif 'clinepass' in identity: provider = 'clinepass'
+        elif 'ollamacloud' in identity: provider = 'ollama-cloud'
+        elif 'opencodego' in identity: provider = 'opencode-go'
+
+        root = config.get('homePath')
+        if driver == 'opencode':
+            environment = instance.get('environment')
+            for item in environment if isinstance(environment, list) else []:
+                if not isinstance(item, dict) or item.get('sensitive'): continue
+                if item.get('name') == 'XDG_DATA_HOME' and item.get('value'):
+                    root = Path(str(item['value'])).expanduser() / 'opencode'
+                    break
+        if not root: continue
+        root = Path(str(root)).expanduser()
+        if not root.is_absolute(): continue
+        key = (driver, provider, str(root.absolute()))
+        if key in seen: continue
+        seen.add(key)
+        found.append({'driver': driver, 'provider': provider, 'root': key[2]})
+    return found
 
 
 def theme():
@@ -242,7 +296,7 @@ def record(key, provider, session, ts, model, project, client, **tokens):
             **{f: number(tokens.get(f)) for f in FIELDS}}
 
 
-def codex_records(path):
+def codex_records(path, provider='codex'):
     session, project, client, model = path.stem, '', 'CLI', 'unknown'
     started = 0
     seen = set()
@@ -261,7 +315,9 @@ def codex_records(path):
                 have_metadata = True
                 session = str(p.get('id') or p.get('session_id') or session)
                 project = p.get('cwd') or project
-                client = 'Desktop' if 'desktop' in str(p.get('originator', '')).lower() else 'CLI'
+                originator = str(p.get('originator') or '').casefold()
+                client = 'T3 Code' if 't3code' in originator else 'Desktop' if 'desktop' in originator else 'CLI'
+                provider = CODEX_ROUTE_PROVIDERS.get(provider_key(p.get('model_provider')), provider)
                 started = timestamp(p.get('timestamp'))
             elif kind == 'turn_context':
                 model = p.get('model') or p.get('model_slug') or model
@@ -278,13 +334,13 @@ def codex_records(path):
                 if fingerprint in seen: continue
                 seen.add(fingerprint)
                 read, write = number(u.get('cached_input_tokens')), number(u.get('cache_write_input_tokens'))
-                yield record(digest('codex', session, fingerprint), 'codex', session, ts, model,
+                yield record(digest('codex', session, fingerprint), provider, session, ts, model,
                              project, client, input=max(0, number(u.get('input_tokens')) - read - write),
                              output=u.get('output_tokens'), cacheRead=read, cacheWrite=write,
                              reasoning=u.get('reasoning_output_tokens'))
 
 
-def claude_records(path):
+def claude_records(path, provider='claude'):
     with path.open(errors='replace') as f:
         for raw in f:
             try: item = json.loads(raw)
@@ -297,8 +353,9 @@ def claude_records(path):
             session = str(item.get('sessionId') or item.get('session_id') or path.stem)
             msg_id = m.get('id') or item.get('uuid')
             key = digest('claude', msg_id, item.get('requestId')) if msg_id else digest('claude', session, item.get('timestamp'), u)
-            yield record(key, 'claude', session, item.get('timestamp'), model, item.get('cwd'),
-                         'Claude Code', input=u.get('input_tokens'), output=u.get('output_tokens'),
+            client = 'Claude Code' if provider == 'claude' else PROVIDERS[provider]
+            yield record(key, provider, session, item.get('timestamp'), model, item.get('cwd'),
+                         client, input=u.get('input_tokens'), output=u.get('output_tokens'),
                          cacheRead=u.get('cache_read_input_tokens'), cacheWrite=u.get('cache_creation_input_tokens'),
                          cacheWrite1h=(u.get('cache_creation') or {}).get('ephemeral_1h_input_tokens'),
                          reasoning=(u.get('output_tokens_details') or {}).get('thinking_tokens'))
@@ -675,8 +732,8 @@ def pi_records(path, provider='pi'):
         yield r
 
 
-def opencode_record(mid, sid, ts, project, model, route, usage, cost):
-    provider = 'opencode-go' if route == 'opencode-go' else 'opencode'
+def opencode_record(mid, sid, ts, project, model, route, usage, cost, provider='opencode'):
+    provider = OPENCODE_ROUTE_PROVIDERS.get(provider_key(route), provider)
     cache = usage.get('cache') or {}
     r = record(digest(provider, mid), provider, sid, ts, model, project, 'OpenCode',
                input=usage.get('input'), output=number(usage.get('output')) + number(usage.get('reasoning')),
@@ -879,7 +936,7 @@ class Ledger:
             for directory in account['directories']:
                 key = ('opencode' if directory['provider'] == 'opencode-go' else directory['provider']) + 'Homes'
                 cfg[key] = cfg.get(key, []) + [directory['path']]
-        warnings, sources = [], []
+        warnings, sources, t3_instances = [], [], t3_provider_instances()
         for provider, roots, parser in (
             ('codex', [os.getenv('CODEX_HOME', str(HOME / '.codex'))] + cfg['codexHomes'], codex_records),
             ('claude', [os.getenv('CLAUDE_CONFIG_DIR', str(HOME / '.claude'))] + cfg['claudeHomes'], claude_records),
@@ -889,14 +946,18 @@ class Ledger:
             ('omp', [str(HOME / '.omp/agent')] + cfg.get('ompHomes', []), lambda path: pi_records(path, 'omp')),
             ('muse', [os.getenv('MUSE_HOME') or str(Path(os.getenv('XDG_DATA_HOME', HOME / '.local/share')) / 'muse')] + cfg.get('museHomes', []), muse_records),
             ('commandcode', [str(HOME / '.commandcode')] + cfg.get('commandcodeHomes', []), commandcode_records)):
-            for root in sorted(set(roots)):
+            root_providers = {str(Path(root).expanduser()): provider for root in roots}
+            if provider in ('codex', 'claude'):
+                for item in t3_instances:
+                    if item['driver'] == provider: root_providers[item['root']] = item['provider']
+            for root, record_provider in sorted(root_providers.items()):
                 root = Path(root).expanduser()
                 folders = [root / 'sessions', root / 'archived_sessions'] if provider == 'codex' else [root / {'claude': 'projects', 'gemini': 'tmp', 'commandcode': 'projects'}.get(provider, 'sessions')]
                 for folder in folders:
                     pattern = 'updates.jsonl' if provider == 'grok' else '*.json*' if provider == 'gemini' else 'session.jsonl' if provider == 'muse' else '*.jsonl'
                     files = sorted(folder.rglob(pattern)) if folder.exists() else []
                     if provider == 'gemini': files = [p for p in files if p.suffix in ('.json', '.jsonl') and 'chats' in p.relative_to(folder).parts[:-1]]
-                    source = {'provider': provider, 'path': str(folder), 'files': len(files), 'exists': folder.exists(),
+                    source = {'provider': record_provider, 'path': str(folder), 'files': len(files), 'exists': folder.exists(),
                               'latestFileAt': None, 'readErrors': 0, 'kind': 'archive' if folder.name == 'archived_sessions' else 'history'}
                     sources.append(source)
                     for p in files:
@@ -905,13 +966,17 @@ class Ledger:
                             source['latestFileAt'] = max(source['latestFileAt'] or 0, stat.st_mtime)
                             old = self.db.execute('SELECT size,mtime FROM files WHERE path=?', (str(p),)).fetchone()
                             if old == (stat.st_size, stat.st_mtime_ns): continue
-                            for r in parser(p): self.put(r, p.resolve())
+                            parsed = parser(p, record_provider) if provider in ('codex', 'claude') else parser(p)
+                            for r in parsed: self.put(r, p.resolve())
                             self.db.execute('INSERT OR REPLACE INTO files VALUES (?,?,?)', (str(p), stat.st_size, stat.st_mtime_ns))
                         except (OSError, ValueError, TypeError, AttributeError):
                             source['readErrors'] += 1
                             warnings.append(f'Could not read {p.name}')
-        opencode_roots = [str(Path(os.getenv('XDG_DATA_HOME', HOME / '.local/share')) / 'opencode')] + cfg.get('opencodeHomes', [])
-        for root in sorted(set(opencode_roots)):
+        opencode_roots = {str(Path(os.getenv('XDG_DATA_HOME', HOME / '.local/share')) / 'opencode'): 'opencode'}
+        opencode_roots.update({str(Path(root).expanduser()): 'opencode' for root in cfg.get('opencodeHomes', [])})
+        for item in t3_instances:
+            if item['driver'] == 'opencode': opencode_roots[item['root']] = item['provider']
+        for root, default_provider in sorted(opencode_roots.items()):
             root = Path(root).expanduser()
             opencode = root / 'opencode.db'
             source = {'provider': 'opencode', 'path': str(opencode), 'files': int(opencode.exists()), 'exists': opencode.exists(), 'kind': 'database'}
@@ -928,7 +993,8 @@ class Ledger:
                       FROM message m LEFT JOIN session s ON s.id=m.session_id
                       WHERE json_extract(m.data,'$.role')='assistant' """
                     for mid, sid, ts, project, model, route, raw, cost in conn.execute(query):
-                        self.put(opencode_record(mid, sid, ts, project, model, route, json.loads(raw or '{}'), cost), opencode.resolve())
+                        self.put(opencode_record(mid, sid, ts, project, model, route,
+                                                 json.loads(raw or '{}'), cost, default_provider), opencode.resolve())
                 except (sqlite3.Error, ValueError, TypeError, AttributeError):
                     source['readErrors'] = 1
                     warnings.append('OpenCode database could not be read; retained previous records.')
@@ -945,7 +1011,8 @@ class Ledger:
                             if item.get('role') != 'assistant': continue
                             self.put(opencode_record(item.get('id') or path.stem, item.get('sessionID') or path.parent.name,
                                 (item.get('time') or {}).get('created'), (item.get('path') or {}).get('cwd'),
-                                item.get('modelID'), item.get('providerID'), item.get('tokens') or {}, item.get('cost')), path.resolve())
+                                item.get('modelID'), item.get('providerID'), item.get('tokens') or {}, item.get('cost'),
+                                default_provider), path.resolve())
                     except (OSError, ValueError, TypeError, AttributeError):
                         source['readErrors'] = source.get('readErrors', 0) + 1
         hermes_roots = [str(HOME / '.hermes')] + cfg.get('hermesHomes', [])

@@ -138,6 +138,55 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(ledger.db.execute('SELECT COUNT(*) FROM events').fetchone(), (2,))
         ledger.db.close()
 
+    def test_t3_provider_instances_are_discovered_and_routed(self):
+        command_home = self.root / 't3/commandcode/codex'
+        cline_data = self.root / 't3/clinepass/data'
+        settings = {'providerInstances': {
+            'commandcode': {'driver': 'codex', 'displayName': 'CommandCode', 'enabled': True,
+                            'environment': [{'name': 'COMMANDCODE_API_KEY', 'value': 't3-secret', 'sensitive': True}],
+                            'config': {'homePath': str(command_home)}},
+            'clinepass': {'driver': 'opencode', 'displayName': 'ClinePass', 'enabled': True,
+                          'environment': [{'name': 'XDG_DATA_HOME', 'value': str(cline_data), 'sensitive': False},
+                                          {'name': 'CLINE_API_KEY', 'value': 't3-secret', 'sensitive': True}]}}}
+        settings_path = self.root / '.t3/userdata/settings.json'
+        settings_path.parent.mkdir(parents=True)
+        settings_path.write_text(json.dumps(settings))
+
+        rollout = self.transcript('t3/commandcode/codex/sessions/2026/09/19/rollout.jsonl', [
+            {'type': 'session_meta', 'timestamp': '2026-09-19T20:00:00Z', 'payload': {
+                'id': 't3-command', 'timestamp': '2026-09-19T20:00:00Z', 'cwd': '/project',
+                'originator': 't3code_desktop', 'model_provider': 'commandcode'}},
+            {'type': 'turn_context', 'timestamp': '2026-09-19T20:00:01Z',
+             'payload': {'model': 'z-ai/glm-5.3-flashx', 'cwd': '/project'}},
+            self.codex_event(ts='2026-09-19T20:00:02Z')])
+        self.assertTrue(rollout.exists())
+
+        opencode = cline_data / 'opencode/opencode.db'
+        opencode.parent.mkdir(parents=True)
+        db = sqlite3.connect(opencode)
+        db.executescript('CREATE TABLE message(id,session_id,time_created,data); CREATE TABLE session(id,directory);')
+        db.execute('INSERT INTO session VALUES (?,?)', ('t3-cline-session', '/project'))
+        db.execute('INSERT INTO message VALUES (?,?,?,?)', (
+            't3-cline-message', 't3-cline-session', 1789866000000,
+            json.dumps({'role': 'assistant', 'providerID': 'cline-pass', 'modelID': 'cline-pass/glm-5.3-flash',
+                        'tokens': {'input': 100, 'output': 20, 'reasoning': 5, 'cache': {'read': 30, 'write': 0}}})))
+        db.commit(); db.close()
+
+        instances = c.t3_provider_instances()
+        self.assertEqual({(item['driver'], item['provider'], item['root']) for item in instances}, {
+            ('codex', 'commandcode', str(command_home)),
+            ('opencode', 'clinepass', str(cline_data / 'opencode'))})
+        self.assertNotIn('t3-secret', json.dumps(instances))
+
+        ledger = c.Ledger(self.root / 't3.sqlite')
+        meta = ledger.scan(c.DEFAULTS)
+        rows = ledger.db.execute('SELECT provider,model,client,input,output,cacheRead,reasoning FROM events ORDER BY provider').fetchall()
+        self.assertEqual(rows, [
+            ('clinepass', 'cline-pass/glm-5.3-flash', 'OpenCode', 100, 25, 30, 5),
+            ('commandcode', 'z-ai/glm-5.3-flashx', 'T3 Code', 30, 20, 70, 10)])
+        self.assertNotIn('t3-secret', json.dumps(meta))
+        ledger.db.close()
+
     def test_unknown_price_is_not_zero(self):
         r = c.record('1', 'codex', 's', 1, 'missing', '', 'CLI', input=100)
         self.assertEqual(c.price(r, {}), (None, None))
@@ -1438,6 +1487,12 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual({r['apiProvider'] for r in rows}, {'commandcode', 'commandcode-anthropic'})
         # Distinct models stay distinct rows.
         self.assertEqual(len(rows), 2)
+
+    def test_commandcode_flashx_uses_its_published_rates(self):
+        rates = c.load_rates()
+        r = c.record('flashx', 'commandcode', 's', 1789000000, 'z-ai/glm-5.3-flashx', '', 'T3 Code',
+                     input=1_000_000, output=1_000_000, cacheRead=1_000_000)
+        self.assertAlmostEqual(c.price(r, rates['document'])[0], 0.37 + 0.59 + 0.1635, places=6)
 
     def test_commandcode_quota_reads_its_windows_and_resets(self):
         # The endpoint reports money-valued windows with a reset each; the

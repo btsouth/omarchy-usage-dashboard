@@ -1,7 +1,7 @@
 {
   "source": "CommandCode published model pricing",
   "url": "https://commandcode.ai/models",
-  "verifiedAt": "2026-09-17",
+  "verifiedAt": "2026-09-19",
   "notes": [
     "Prices are per million tokens, transcribed from the CommandCode models page. These are the resale rates CommandCode bills against plan credits, which are not always the lab list prices for the same model.",
     "Every key is namespaced commandcode/<model id as the API returns it>, with a second namespaced alias for the short name, so a bare model name can never pick up a rate that belongs to another route.",
@@ -77,10 +77,20 @@
       "output_cost_per_token": 5e-07,
       "cache_read_input_token_cost": 3e-08
     },
+    "commandcode/z-ai/glm-5.3-flashx": {
+      "input_cost_per_token": 3.7e-07,
+      "output_cost_per_token": 5.9e-07,
+      "cache_read_input_token_cost": 1.635e-07
+    },
     "commandcode/glm-5.3-flash": {
       "input_cost_per_token": 1.5e-07,
       "output_cost_per_token": 5e-07,
       "cache_read_input_token_cost": 3e-08
+    },
+    "commandcode/glm-5.3-flashx": {
+      "input_cost_per_token": 3.7e-07,
+      "output_cost_per_token": 5.9e-07,
+      "cache_read_input_token_cost": 1.635e-07
     },
     "commandcode/Qwen/Qwen3.8-Flash": {
       "input_cost_per_token": 1.6e-07,

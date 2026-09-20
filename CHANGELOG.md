@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Discover T3 Code's isolated provider instances and attribute CommandCode Codex/Claude runtimes to the CommandCode card. Count FlashX with its published rates, and route T3 OpenCode instances for Ollama Cloud and ClinePass to their own cards.
 - Make reports read-only. Collect on open, Refresh, settings save, and the timer instead of scanning whenever a filter changes. Keep demo and test source paths isolated.
 - Fix Cursor fallback pagination, capped-history resume, forced refresh, and stale error status. Commit events before advancing the history watermark, and rebuild old watermarks once to recover truncated pulls. Missing event prices stay unpriced.
 - Keep Go allowance estimates within the selected account and drilldown. Prevent unlisted resale models from falling back to another provider's prices.
