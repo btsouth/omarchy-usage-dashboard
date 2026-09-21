@@ -48,9 +48,10 @@ OLLAMA_WINDOWS = {'session': 'Session (5-hour)', 'weekly': 'Weekly (7-day)', 'mo
 # string its own API returns: OpenCode Go and Ollama Cloud record a bare name,
 # while CommandCode and ClinePass prefix it with the vendor's id. Those are the
 # same model, so the Models breakdown groups them and shows the split by route.
-# Identical strings need no entry below; a vendor-prefixed spelling does, and
-# every mapping is listed rather than inferred by stripping a prefix, because a
-# prefix rule would also merge model families that only look alike.
+# Identical strings need no entry below. Most vendor-prefixed spellings are
+# listed explicitly because a general prefix rule would merge model families
+# that only look alike. Muse Spark is the narrow exception: its routes add
+# vendor prefixes to the same `muse-spark-*` model ids.
 MODEL_FAMILIES = {'deepseek/deepseek-v4.1-flash': 'deepseek-v4.1-flash',
                   'cline-pass/deepseek-v4.1-flash': 'deepseek-v4.1-flash'}
 # T3 Code keeps each configured provider instance in settings.json. The
@@ -65,6 +66,9 @@ OPENCODE_ROUTE_PROVIDERS = {'opencodego': 'opencode-go', 'clinepass': 'clinepass
 def model_family(name):
     """The model a recorded string belongs to. Anything unlisted is its own
     family, so a new model is never folded into a family by accident."""
+    bare = name.rsplit('/', 1)[-1]
+    if bare.startswith('muse-spark-'):
+        return bare
     return MODEL_FAMILIES.get(name, name)
 # Stands in for a stored key in reports so the settings form can show that one
 # exists without sending it back over the report channel. Never a valid key.

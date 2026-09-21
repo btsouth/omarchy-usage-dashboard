@@ -1301,6 +1301,52 @@ class CollectorTests(unittest.TestCase):
         self.assertNotAlmostEqual(merged['value'], 4 * per_route[0], places=6)
         self.assertEqual(data['models'][0]['provider'], 'opencode-go')
 
+    def test_muse_model_groups_opencode_hermes_and_commandcode_spellings(self):
+        ledger = c.Ledger(self.root / 'muse-family.sqlite')
+        self.addCleanup(ledger.db.close)
+        ledger.put(c.opencode_record('open-message', 'open-session', 1789000000, '/p',
+                                     'muse-spark-1.3-contributor', 'opencode-go',
+                                     {'input': 100, 'output': 20, 'reasoning': 5,
+                                      'cache': {'read': 70, 'write': 0}}, 0))
+
+        hermes = self.hermes_ledger([{
+            'session_id': 'hermes-session', 'model': 'muse-spark-1.3-contributor',
+            'billing_provider': 'opencode-go', 'input_tokens': 1000,
+            'output_tokens': 200, 'cache_read_tokens': 5000,
+        }], sessions=[('hermes-session', '/p')])
+        for item in c.hermes_records(hermes):
+            ledger.put(item['row'], hermes)
+
+        commandcode = self.transcript('commandcode/muse.jsonl', [
+            self.commandcode_event(model='meta/muse-spark-1.3-contributor',
+                                   ts='2026-09-15T12:00:00Z')])
+        for item in c.commandcode_records(commandcode):
+            ledger.put(item, commandcode)
+
+        cfg = c.DEFAULTS | {'enabled': ['opencode-go', 'commandcode']}
+        now = dt.datetime(2026, 9, 16, 12).astimezone()
+        with patch.object(c, 'quota', return_value={'limits': []}), \
+             patch.object(c, 'account_quotas', return_value=({}, {})), \
+             patch.object(c, 'theme', return_value={}):
+            data = c.report(ledger, cfg, days=365, now=now)
+            prefixed = c.report(ledger, cfg, days=365, now=now,
+                                selection={'model': 'meta/muse-spark-1.3-contributor'})
+
+        self.assertEqual(c.model_family('meta/muse-spark-1.3-contributor'),
+                         'muse-spark-1.3-contributor')
+        self.assertEqual(c.model_family('muse-spark-1.2-contributor'),
+                         'muse-spark-1.2-contributor')
+        self.assertEqual([row['name'] for row in data['models']],
+                         ['muse-spark-1.3-contributor'])
+        muse = data['models'][0]
+        self.assertEqual(muse['tokens'], 6590)
+        self.assertEqual({row['provider']: (row['model'], row['tokens'])
+                          for row in muse['routes']}, {
+            'opencode-go': ('muse-spark-1.3-contributor', 6395),
+            'commandcode': ('meta/muse-spark-1.3-contributor', 195),
+        })
+        self.assertEqual(prefixed['summary']['tokens'], 6590)
+
     def test_a_model_selection_matches_every_route_spelling(self):
         ledger, families = self.model_family_ledger()
         cfg = c.DEFAULTS | {'enabled': list(families)}
