@@ -782,6 +782,20 @@ Item {
     return word.charAt(0).toUpperCase() + word.slice(1)
   }
 
+  // Keep this in step with collector.py:model_family. The stored model id is
+  // left untouched on each provider; this name is only the cross-route family
+  // used by the panel's model totals.
+  function modelFamily(id) {
+    var name = String(id || "unknown")
+    var explicit = {
+      "deepseek/deepseek-v4.1-flash": "deepseek-v4.1-flash",
+      "cline-pass/deepseek-v4.1-flash": "deepseek-v4.1-flash"
+    }
+    if (explicit[name]) return explicit[name]
+    var bare = name.slice(name.lastIndexOf("/") + 1)
+    return bare.indexOf("muse-spark-") === 0 ? bare : name
+  }
+
   // Model ids arrive hyphenated with the version split across segments
   // (`claude-opus-4-8`, `gpt-5.6-sol`). Rejoin the numeric run into one
   // version and title-case the words around it.

@@ -61,7 +61,7 @@ Panel {
   property double nowMs: Date.now()
 
   readonly property var limits: limitWindows(provider)
-  readonly property var models: modelRows(provider)
+  readonly property var models: modelRows(providers)
   readonly property var headline: bindingWindow(provider)
   readonly property var balance: provider ? (provider.balance || null) : null
   // Banked resets a provider grants for clearing a rate limit window early.
@@ -277,23 +277,34 @@ Panel {
     return peak
   }
 
-  function modelRows(p) {
-    var usageByModel = p ? (p.modelUsage || {}) : {}
+  function modelRows(providerRows) {
+    var totals = {}
+    for (var p = 0; p < providerRows.length; p++) {
+      var usageByModel = providerRows[p] ? (providerRows[p].modelUsage || {}) : {}
+      for (var id in usageByModel) {
+        var family = usage.modelFamily(id)
+        var bucket = usageByModel[id] || {}
+        var row = totals[family]
+        if (!row) row = totals[family] = {
+          id: family,
+          name: usage.friendlyModelName(family),
+          total: 0,
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0
+        }
+        row.input += Number(bucket.inputTokens || 0)
+        row.output += Number(bucket.outputTokens || 0)
+        row.cacheRead += Number(bucket.cacheReadInputTokens || 0)
+        row.cacheWrite += Number(bucket.cacheCreationInputTokens || 0)
+      }
+    }
     var rows = []
-    for (var id in usageByModel) {
-      var bucket = usageByModel[id] || {}
-      var input = Number(bucket.inputTokens || 0)
-      var output = Number(bucket.outputTokens || 0)
-      var cacheRead = Number(bucket.cacheReadInputTokens || 0)
-      var cacheWrite = Number(bucket.cacheCreationInputTokens || 0)
-      rows.push({
-        name: usage.friendlyModelName(id),
-        total: input + output + cacheRead + cacheWrite,
-        input: input,
-        output: output,
-        cacheRead: cacheRead,
-        cacheWrite: cacheWrite
-      })
+    for (var family in totals) {
+      var item = totals[family]
+      item.total = item.input + item.output + item.cacheRead + item.cacheWrite
+      rows.push(item)
     }
     rows.sort(function(a, b) { return b.total - a.total })
     return rows.slice(0, 4)
@@ -751,7 +762,7 @@ Panel {
 
             PanelSectionHeader {
               width: parent.width
-              text: "TOKENS BY MODEL"
+              text: "TOKENS BY MODEL · ALL ROUTES"
               foreground: root.foreground
               fontFamily: root.fontFamily
             }
