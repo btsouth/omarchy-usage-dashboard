@@ -115,16 +115,16 @@ class CollectorTests(unittest.TestCase):
 
     def test_commandcode_session_usage_and_checkpoint_skip(self):
         header = {'type': 'session', 'version': 3, 'id': 'sess-1', 'timestamp': '2026-09-19T11:59:00Z',
-                  'cwd': '/home/bts/Projects/demo'}
-        path = self.transcript('commandcode/home-bts-projects-demo/abc.jsonl',
+                  'cwd': '/home/user/Projects/demo'}
+        path = self.transcript('commandcode/home-user-projects-demo/abc.jsonl',
                                [header, self.commandcode_event(), self.commandcode_event(mid='m2', model='deepseek/deepseek-v4.1-flash')])
-        self.transcript('commandcode/home-bts-projects-demo/abc.checkpoints.jsonl', [self.commandcode_event(mid='ghost')])
+        self.transcript('commandcode/home-user-projects-demo/abc.checkpoints.jsonl', [self.commandcode_event(mid='ghost')])
         ledger = c.Ledger(self.root / 'commandcode.sqlite')
         for r in c.commandcode_records(path): ledger.put(r)
         rows = ledger.db.execute('SELECT session, model, project, client, input, output, cacheRead, cacheWrite FROM events ORDER BY model').fetchall()
         self.assertEqual(rows, [
-            ('sess-1', 'deepseek/deepseek-v4.1-flash', '/home/bts/Projects/demo', 'Command Code', 100, 20, 70, 5),
-            ('sess-1', 'glm-5.3-flash', '/home/bts/Projects/demo', 'Command Code', 100, 20, 70, 5),
+            ('sess-1', 'deepseek/deepseek-v4.1-flash', '/home/user/Projects/demo', 'Command Code', 100, 20, 70, 5),
+            ('sess-1', 'glm-5.3-flash', '/home/user/Projects/demo', 'Command Code', 100, 20, 70, 5),
         ])
         ledger.db.close()
 
