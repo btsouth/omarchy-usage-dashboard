@@ -17,6 +17,10 @@ if command -v omarchy-agent-usage-refresh >/dev/null 2>&1; then
 elif command -v omarchy-agent-usage-update >/dev/null 2>&1; then
   timeout 60 omarchy-agent-usage-update "$@" || true
 fi
+# Repair the intermittent Codex app-server timeout in Omarchy's collector.
+# The helper only probes records that actually failed at account/read or
+# account/rateLimits/read, and knows the configured home for named accounts.
+python3 "$project_dir/codex_limits.py" || true
 status=0
 python3 "$project_dir/collector.py" scan "${force[@]}" || status=$?
 # Reset notifications ride every refresh path, timer and panel alike.

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Recover Codex limits when Omarchy's app-server reader intermittently times out on `account/read` or `account/rateLimits/read`. The dashboard refresh reads the RPC stream without text buffering and repairs affected records, including named Codex accounts with one configured home folder.
+
 ## 1.6.0 - 2026-09-22
 
 - Show CommandCode's extra credits, the top-up wallet spent once the plan's own credits run out, as a money balance on the provider card and in the bar panel. The wallet comes from the billing response the plan windows are already read from (`purchasedCredits`); what is left is the endpoint's own figure, and the amount it is measured against is that plus what the period has drawn from the wallet, so the derived figure is labelled an estimate. A wallet with nothing in it, or below the cent the card prints, stays off the card, and one left over from a plan with no windows still shows. A record's balance now carries the vendor's own name for the wallet ("Extra credits"), which the panel shows in place of the generic label, and the dashboard card gained the same balance line and meter.
