@@ -1539,7 +1539,8 @@ def commandcode_quota(force=False):
             if isinstance(drawn, (int, float)) and drawn >= 0:
                 balance['spent'] = drawn
                 balance['funded'] = remaining + drawn
-        if not limits and not balance: raise ValueError('CommandCode returned no recognized usage windows.')
+        if not limits and not isinstance(remaining, (int, float)):
+            raise ValueError('CommandCode returned no recognized usage windows.')
         cached = {'limits': limits, 'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(), 'error': '', 'plan': plan}
         if balance: cached['balance'] = balance
     except Exception as exc:

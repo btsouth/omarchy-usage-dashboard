@@ -1655,6 +1655,34 @@ class CollectorTests(unittest.TestCase):
         # No windows and no wallet is still a broken read, not an empty card.
         self.assertIn('balance', c.quota('commandcode'))
 
+    def test_commandcode_drained_wallet_replaces_a_stale_balance(self):
+        # A drained wallet on a plan that reports no windows: the read itself
+        # succeeds with nothing to show, so the snapshot is replaced and the
+        # previous balance is gone. Leaving it behind an error would put money
+        # on the card that is not there.
+        good = {
+            '/alpha/billing/credits': {'credits': {'purchasedCredits': 8.44}},
+            '/alpha/billing/subscriptions': {'data': {'planId': 'individual-goat',
+                                                      'currentPeriodEnd': '2026-10-17T12:08:37.000Z'}},
+            '/alpha/usage/summary': {'totalCredits': 23.0, 'totalPurchasedCredits': 1.55}}
+        drained = {
+            '/alpha/billing/credits': {'credits': {'purchasedCredits': 0.0}},
+            '/alpha/billing/subscriptions': {'data': {'planId': 'individual-goat',
+                                                      'currentPeriodEnd': '2026-10-17T12:08:37.000Z'}},
+            '/alpha/usage/summary': {'totalCredits': 0.0, 'totalPurchasedCredits': 0.0}}
+        with patch.dict('os.environ', {'COMMANDCODE_API_KEY': 'test-cc-key',
+                                       'XDG_CONFIG_HOME': str(self.root / 'config'),
+                                       'XDG_DATA_HOME': str(self.root / 'data')}):
+            with patch.object(c, 'commandcode_call', side_effect=lambda key, path: good[path]):
+                c.commandcode_quota(force=True)
+            self.assertIn('balance', c.quota('commandcode'))
+            with patch.object(c, 'commandcode_call', side_effect=lambda key, path: drained[path]):
+                result = c.commandcode_quota(force=True)
+        self.assertEqual(result['error'], '')
+        self.assertEqual(result['limits'], [])
+        self.assertNotIn('balance', result)
+        self.assertNotIn('balance', c.quota('commandcode'))
+
     def test_agent_record_carries_a_provider_balance(self):
         # The panel reads the agent record rather than the quota snapshot, so a
         # wallet has to land there too, and a provider without one keeps the
