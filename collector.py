@@ -1213,6 +1213,9 @@ def quota(provider):
         except (OSError, ValueError): d = {}
         result = {'limits': d.get('limits', []), 'updatedAt': d.get('updatedAt'), 'error': d.get('error', '')}
         if provider in ('muse', 'ollama-cloud', 'commandcode', 'clinepass'): result['plan'] = d.get('plan', '')
+        # A prepaid wallet a provider reports alongside its windows rides
+        # through to the card unchanged.
+        if d.get('balance'): result['balance'] = d['balance']
         return result
     p = STATE.parent / 'agents/usage' / (provider + '.json')
     try:
@@ -1462,7 +1465,11 @@ def commandcode_quota(force=False):
 
     Every figure is read from the API rather than assumed: the monthly cap is
     the remaining credits plus what this period has spent, which the endpoints
-    agree on exactly, so a plan change needs no code change."""
+    agree on exactly, so a plan change needs no code change.
+    /alpha/billing/credits also reports the extra-credit wallet bought on top
+    of the plan (its own purchasedCredits), spent only after the monthly
+    credits run out and never expiring, so the snapshot carries it as a
+    balance the card can show."""
     path = STATE / 'commandcode-quota.json'
     key = commandcode_key()
     key_file = config_dir() / 'commandcode.key'
@@ -1492,7 +1499,8 @@ def commandcode_quota(force=False):
             limits.append({'label': label, 'percent': min(1.0, max(0.0, used / cap)),
                            'raw': used / cap,
                            'resetsAt': dt.datetime.fromtimestamp(timestamp(reset), dt.timezone.utc).isoformat() if timestamp(reset) else ''})
-        monthly = (credits.get('credits') or {}).get('monthlyCredits')
+        wallet = credits.get('credits') or {}
+        monthly = wallet.get('monthlyCredits')
         reset_at = ''
         plan = ''
         try:
@@ -1503,18 +1511,37 @@ def commandcode_quota(force=False):
                 plan = plan_id.split('-')[-1].upper()
             reset_at = str(subscription.get('currentPeriodEnd') or '')
         except Exception: pass
-        if isinstance(monthly, (int, float)):
-            # What this billing period has spent, from the same source the CLI
-            # shows. Remaining + spent is the period's allowance.
-            try: spent = commandcode_call(key, '/alpha/usage/summary').get('totalCredits')
-            except Exception: spent = None
-            if isinstance(spent, (int, float)):
-                cap = monthly + spent
-                if cap > 0:
-                    limits.append({'label': 'Monthly', 'percent': min(1.0, max(0.0, spent / cap)),
-                                   'raw': spent / cap, 'resetsAt': reset_at})
-        if not limits: raise ValueError('CommandCode returned no recognized usage windows.')
+        # One summary call answers both money questions below: what this
+        # billing period has spent, from the same source the CLI shows, and how
+        # much of the top-up wallet it drew down.
+        try: summary = commandcode_call(key, '/alpha/usage/summary')
+        except Exception: summary = {}
+        if not isinstance(summary, dict): summary = {}
+        spent = summary.get('totalCredits')
+        if isinstance(monthly, (int, float)) and isinstance(spent, (int, float)):
+            # Remaining + spent is the period's allowance.
+            cap = monthly + spent
+            if cap > 0:
+                limits.append({'label': 'Monthly', 'percent': min(1.0, max(0.0, spent / cap)),
+                               'raw': spent / cap, 'resetsAt': reset_at})
+        # Extra credits are a wallet rather than a window: they never expire,
+        # and they are spent only once the plan's own credits are gone. The
+        # endpoint states what is left; what it was funded with is that plus
+        # what this period has drawn from it, so the derived figure says so.
+        # The card shows money, so a residue below the cent it would print
+        # stays off the card rather than reading as a $0.00 meter, and a wallet
+        # that outlives the plan's windows still carries the card on its own.
+        remaining = wallet.get('purchasedCredits')
+        drawn = summary.get('totalPurchasedCredits')
+        balance = None
+        if isinstance(remaining, (int, float)) and round(remaining, 2) > 0:
+            balance = {'label': 'Extra credits', 'remaining': remaining, 'currency': 'USD', 'estimated': True}
+            if isinstance(drawn, (int, float)) and drawn >= 0:
+                balance['spent'] = drawn
+                balance['funded'] = remaining + drawn
+        if not limits and not balance: raise ValueError('CommandCode returned no recognized usage windows.')
         cached = {'limits': limits, 'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(), 'error': '', 'plan': plan}
+        if balance: cached['balance'] = balance
     except Exception as exc:
         # Never quote a credential-bearing request object, URL, or body.
         cached['error'] = str(exc) if isinstance(exc, QuotaUnavailable) else 'CommandCode usage unavailable. Check the API key.'
@@ -1944,6 +1971,10 @@ def write_agent_record(ledger, provider):
        'activeDays': len(active_dates), 'activeDates': active_dates,
        'recentDays': [{'date': x['date'], 'messageCount': x['providers'][provider]['tokens']} for x in data['daily']],
        'modelUsage': {}}
+    # A prepaid balance is part of the account's state the card shows, so it
+    # travels with the record the panel reads. Providers without one leave the
+    # key out rather than carrying a null.
+    if q.get('balance'): record_data['balance'] = q['balance']
     # Existing popup labels model totals as all-time. Supply the full ledger.
     for model, inp, out, read, write in ledger.db.execute('SELECT model,SUM(input),SUM(output),SUM(cacheRead),SUM(cacheWrite) FROM events WHERE provider=? GROUP BY model', (provider,)):
         record_data['modelUsage'][model] = {'inputTokens': inp, 'outputTokens': out, 'cacheReadInputTokens': read, 'cacheCreationInputTokens': write}

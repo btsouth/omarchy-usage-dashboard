@@ -1584,6 +1584,94 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual([limit['label'] for limit in result['limits']], ['5 hours', 'Monthly'])
         self.assertEqual(result['plan'], '')
 
+    def test_commandcode_extra_credits_ride_along_as_a_balance(self):
+        # The plan's credits run out before the top-up wallet does, so the
+        # wallet is a balance rather than a window: what is left comes from the
+        # endpoint, what it was funded with is that plus what this period drew
+        # from it, and the card is told the funded figure is derived.
+        payloads = {
+            '/alpha/billing/credits': {'credits': {'monthlyCredits': 12.0, 'purchasedCredits': 8.4634954014},
+                                       'windowLimits': {'weekly': {'used': 40.0, 'cap': 35, 'resetAt': 1790253387497}}},
+            '/alpha/billing/subscriptions': {'data': {'planId': 'individual-goat',
+                                                      'currentPeriodEnd': '2026-10-17T12:08:37.000Z'}},
+            '/alpha/usage/summary': {'totalCredits': 23.0, 'totalPurchasedCredits': 1.533636676}}
+        with patch.dict('os.environ', {'COMMANDCODE_API_KEY': 'test-cc-key',
+                                       'XDG_CONFIG_HOME': str(self.root / 'config'),
+                                       'XDG_DATA_HOME': str(self.root / 'data')}), \
+             patch.object(c, 'commandcode_call', side_effect=lambda key, path: payloads[path]):
+            result = c.commandcode_quota(force=True)
+        self.assertEqual(result['error'], '')
+        balance = result['balance']
+        self.assertEqual(balance['label'], 'Extra credits')
+        self.assertAlmostEqual(balance['remaining'], 8.4634954014, places=6)
+        self.assertAlmostEqual(balance['spent'], 1.533636676, places=6)
+        # Money left plus the period's draw on the wallet is the only funded
+        # figure either endpoint offers.
+        self.assertAlmostEqual(balance['funded'], 9.9971320774, places=6)
+        self.assertEqual(balance['currency'], 'USD')
+        self.assertTrue(balance['estimated'])
+        # The card reads the same file back through the quota dispatcher.
+        self.assertAlmostEqual(c.quota('commandcode')['balance']['remaining'], 8.4634954014, places=6)
+
+    def test_commandcode_empty_wallet_stays_off_the_card(self):
+        # A plan nobody has topped up reports purchasedCredits: 0, and a $0.00
+        # wallet on every refresh would be noise rather than information. A
+        # residue below the cent the card prints is that same $0.00, so it is
+        # treated the same way.
+        for leftover in (0.0, 0.004):
+            payloads = {
+                '/alpha/billing/credits': {'credits': {'monthlyCredits': 70.0, 'purchasedCredits': leftover},
+                                           'windowLimits': {'fiveHour': {'used': 1.0, 'cap': 14, 'resetAt': 1789666587497}}},
+                '/alpha/billing/subscriptions': {'data': {'planId': 'individual-goat',
+                                                          'currentPeriodEnd': '2026-10-17T12:08:37.000Z'}},
+                '/alpha/usage/summary': {'totalCredits': 1.0, 'totalPurchasedCredits': 0.0}}
+            with patch.dict('os.environ', {'COMMANDCODE_API_KEY': 'test-cc-key',
+                                           'XDG_CONFIG_HOME': str(self.root / 'config'),
+                                           'XDG_DATA_HOME': str(self.root / 'data')}), \
+                 patch.object(c, 'commandcode_call', side_effect=lambda key, path: payloads[path]):
+                result = c.commandcode_quota(force=True)
+            self.assertNotIn('balance', result, leftover)
+            self.assertEqual([limit['label'] for limit in result['limits']], ['5 hours', 'Monthly'])
+        self.assertNotIn('balance', c.quota('commandcode'))
+
+    def test_commandcode_wallet_outlives_a_plan_with_no_windows(self):
+        # Extra credits are bought outright, so they survive the plan that
+        # funded the windows: an account whose windows are gone still shows the
+        # money it has left instead of an error and no card.
+        payloads = {
+            '/alpha/billing/credits': {'credits': {'purchasedCredits': 8.44}},
+            '/alpha/billing/subscriptions': {'data': {'planId': 'individual-goat',
+                                                      'currentPeriodEnd': '2026-10-17T12:08:37.000Z'}},
+            '/alpha/usage/summary': {'totalCredits': 23.0, 'totalPurchasedCredits': 1.55}}
+        with patch.dict('os.environ', {'COMMANDCODE_API_KEY': 'test-cc-key',
+                                       'XDG_CONFIG_HOME': str(self.root / 'config'),
+                                       'XDG_DATA_HOME': str(self.root / 'data')}), \
+             patch.object(c, 'commandcode_call', side_effect=lambda key, path: payloads[path]):
+            result = c.commandcode_quota(force=True)
+        self.assertEqual(result['error'], '')
+        self.assertEqual(result['limits'], [])
+        self.assertAlmostEqual(result['balance']['remaining'], 8.44, places=6)
+        self.assertAlmostEqual(result['balance']['funded'], 9.99, places=6)
+        # No windows and no wallet is still a broken read, not an empty card.
+        self.assertIn('balance', c.quota('commandcode'))
+
+    def test_agent_record_carries_a_provider_balance(self):
+        # The panel reads the agent record rather than the quota snapshot, so a
+        # wallet has to land there too, and a provider without one keeps the
+        # key out instead of carrying a null.
+        ledger = c.Ledger(self.root / 'balance.sqlite')
+        ledger.put(c.record('a', 'commandcode', 's', '2026-09-19T12:00:00Z', 'glm-5.3-flash', '', 'T3 Code', input=10))
+        wallet = {'label': 'Extra credits', 'remaining': 8.47, 'spent': 1.53, 'funded': 10.0,
+                  'currency': 'USD', 'estimated': True}
+        with patch.object(c, 'quota', return_value={'limits': [], 'balance': wallet}):
+            c.write_agent_record(ledger, 'commandcode')
+        record = json.loads((c.STATE.parent / 'agents/usage/commandcode.json').read_text())
+        self.assertEqual(record['balance'], wallet)
+        with patch.object(c, 'quota', return_value={'limits': []}):
+            c.write_agent_record(ledger, 'grok')
+        self.assertNotIn('balance', json.loads((c.STATE.parent / 'agents/usage/grok.json').read_text()))
+        ledger.db.close()
+
     def test_commandcode_quota_errors_do_not_expose_the_key(self):
         with patch.dict('os.environ', {'COMMANDCODE_API_KEY': 'sk-secret-cc-value',
                                        'XDG_CONFIG_HOME': str(self.root / 'config'),

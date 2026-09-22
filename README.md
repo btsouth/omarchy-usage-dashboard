@@ -100,7 +100,7 @@ After every refresh, the dashboard compares each provider's limits against the p
 | Pi / Oh My Pi | Saved assistant usage | Not collected |
 | Muse | Completed model responses, including subagents | From the existing Muse login |
 | Ollama Cloud | T3 Code, Hermes agent sessions, and background work | From an Ollama Cloud API key |
-| CommandCode | T3 Code, Hermes agent sessions, and Command Code CLI transcripts | From a CommandCode API key |
+| CommandCode | T3 Code, Hermes agent sessions, and Command Code CLI transcripts | From a CommandCode API key: plan windows and the extra-credit balance |
 | ClinePass | T3 Code and Hermes agent sessions | From a ClinePass API key |
 | Cursor | Cloud usage events (tokens and list-price cost per model) | Billing-cycle usage from your Cursor sign-in |
 | Hermes (OpenCode Go, Ollama Cloud, CommandCode, ClinePass) | Agent sessions, including background work | Not collected; adds to the cards for those routes |

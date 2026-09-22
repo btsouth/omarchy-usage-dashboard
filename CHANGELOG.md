@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Show CommandCode's extra credits, the top-up wallet spent once the plan's own credits run out, as a money balance on the provider card and in the bar panel. The wallet comes from the billing response the plan windows are already read from (`purchasedCredits`); what is left is the endpoint's own figure, and the amount it is measured against is that plus what the period has drawn from the wallet, so the derived figure is labelled an estimate. A wallet with nothing in it, or below the cent the card prints, stays off the card, and one left over from a plan with no windows still shows. A record's balance now carries the vendor's own name for the wallet ("Extra credits"), which the panel shows in place of the generic label, and the dashboard card gained the same balance line and meter.
 - Count vendor-prefixed `muse-spark-*` records with the same bare Muse model in model totals and filters, including the bar panel's all-route model list, while retaining their OpenCode Go, CommandCode, ClinePass, or Ollama Cloud route attribution.
 - Discover T3 Code's isolated provider instances and attribute CommandCode Codex/Claude runtimes to the CommandCode card. Count FlashX with its published rates, and route T3 OpenCode instances for Ollama Cloud and ClinePass to their own cards.
 - Make reports read-only. Collect on open, Refresh, settings save, and the timer instead of scanning whenever a filter changes. Keep demo and test source paths isolated.
