@@ -217,9 +217,20 @@ Panel {
 
   function balanceDetailText(b) {
     if (!b || !(b.funded > 0)) return ""
-    var text = formatMoney(b.spent, b.currency) + " spent of " + formatMoney(b.funded, b.currency) + " funded"
+    // Spent is printed as the difference, so the three figures on the card add
+    // up to the cent instead of rounding apart.
+    var spent = Number(b.funded) - Number(b.remaining)
+    if (!isFinite(spent) || spent < 0) spent = Number(b.spent) || 0
+    var text = formatMoney(spent, b.currency) + " spent of " + formatMoney(b.funded, b.currency) + " funded"
     if (b.estimated) text += " · estimated"
     return text
+  }
+
+  // A wallet the vendor names itself keeps that name; the generic label is
+  // for a collector that reports a balance without saying what it is called.
+  function balanceLabelText(b) {
+    var label = b ? String(b.label || "").trim() : ""
+    return label !== "" ? label : "Prepaid credits"
   }
 
   // ---------------------------------------------------------------- content
@@ -639,7 +650,9 @@ Panel {
 
               Text {
                 id: balanceLabel
-                text: "Prepaid credits"
+                // The vendor names its own wallet, so the text is data now.
+                textFormat: Text.PlainText
+                text: root.balanceLabelText(root.balance)
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body

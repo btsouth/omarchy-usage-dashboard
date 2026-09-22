@@ -288,7 +288,10 @@ Item {
       funded: isFinite(funded) && funded > 0 ? funded : 0,
       spent: Math.max(0, Number(raw.spent) || 0),
       currency: String(raw.currency || "USD"),
-      estimated: raw.estimated === true
+      estimated: raw.estimated === true,
+      // The vendor's own name for the wallet when it has one ("Extra
+      // credits"); the collector decides, the panel just reads it.
+      label: String(raw.label || "")
     }
   }
 

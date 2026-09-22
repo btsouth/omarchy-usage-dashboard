@@ -52,6 +52,15 @@ with tempfile.TemporaryDirectory(prefix='usage-dashboard-demo-') as tmp:
     ledger.db.execute("UPDATE events SET reportedValue=0.012,apiProvider='example-provider' WHERE provider IN ('opencode','pi','omp')")
     ledger.db.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)', ('scan', json.dumps(
         {'sources': [], 'warnings': [], 'scannedAt': time.time(), 'machine': 'demo-computer'})))
+    # A topped-up wallet so the capture smoke renders the balance line on a
+    # provider card. Every figure here is synthetic.
+    c.atomic_json(c.STATE / 'commandcode-quota.json', {
+        'limits': [{'label': '5 hours', 'percent': 0.25, 'raw': 0.25, 'resetsAt': ''},
+                   {'label': 'Weekly', 'percent': 0.1, 'raw': 0.1, 'resetsAt': ''},
+                   {'label': 'Monthly', 'percent': 0.5, 'raw': 0.5, 'resetsAt': ''}],
+        'balance': {'label': 'Extra credits', 'remaining': 8.47, 'spent': 1.53, 'funded': 10.0,
+                    'currency': 'USD', 'estimated': True},
+        'updatedAt': dt.datetime.now(dt.timezone.utc).isoformat(), 'error': '', 'plan': 'GOAT'})
     ledger.db.commit();ledger.db.close()
     # Copy QML into an isolated path so IPC cannot target the real dashboard.
     import shutil

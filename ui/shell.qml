@@ -727,6 +727,31 @@ Scope {
                                         }
                                     }
                                     Column {
+                                        id: walletSection
+                                        // A wallet the provider reports on top of its windows:
+                                        // money left rather than a share of a cap. A balance
+                                        // that would print as $0.00 stays off the card.
+                                        visible: !!modelData.quota.balance && Math.round((modelData.quota.balance.remaining || 0) * 100) > 0
+                                        width: providerColumn.width; spacing: 4
+                                        readonly property var wallet: modelData.quota.balance || ({})
+                                        readonly property real spent: Math.max(0, Number(wallet.funded || 0) - Number(wallet.remaining || 0))
+
+                                        RowLayout { width: parent.width
+                                            Sub { text: walletSection.wallet.label || "Prepaid credits"
+                                                  textFormat: Text.PlainText; Layout.fillWidth: true; elide: Text.ElideRight }
+                                            Label { text: root.money(walletSection.wallet.remaining)+" left"; font.pixelSize: 11 }
+                                        }
+                                        Rectangle { visible: walletSection.wallet.funded > 0; width: parent.width; height: 4; radius: 2; color: root.edge
+                                            Rectangle { height: 4; radius: 2
+                                                width: parent.width*Math.min(1,Math.max(0, walletSection.wallet.remaining/(walletSection.wallet.funded || 1)))
+                                                color: walletSection.wallet.funded > 0 && walletSection.wallet.remaining/walletSection.wallet.funded <= 0.1 ? root.colorFor("claude") : Qt.alpha(root.ink,0.55) }
+                                        }
+                                        Sub { visible: walletSection.wallet.funded > 0
+                                              text: root.money(walletSection.spent)+" spent of "+root.money(walletSection.wallet.funded)+" funded"
+                                                    +(walletSection.wallet.estimated ? " · estimated" : "")
+                                              font.pixelSize: 10 }
+                                    }
+                                    Column {
                                         visible: !!modelData.models && modelData.models.length > 0
                                         width: providerColumn.width; spacing: 5
                                         Sub { text: "Models · this period" }
