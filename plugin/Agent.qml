@@ -25,6 +25,19 @@ Item {
   function parse(content) {
     try {
       var parsed = JSON.parse(String(content || ""))
+      // Keep the last successful window visible while the dashboard retries
+      // Omarchy's intermittent Codex RPC timeout. Mark it as stale so the
+      // panel does not present the old percentage as a fresh reading.
+      if (parsed && root.record && parsed.id === root.record.id
+          && parsed.usageStatusText === "Codex limits unavailable"
+          && (parsed.authHelpText === "account/read" || parsed.authHelpText === "account/rateLimits/read")
+          && root.record.limits && root.record.limits.length > 0) {
+        parsed.limits = root.record.limits
+        parsed.tierLabel = root.record.tierLabel
+        parsed.usageStatusText = ""
+        parsed.limitsStale = true
+        parsed.retryAdvised = true
+      }
       root.record = parsed && typeof parsed === "object" ? parsed : null
     } catch (e) {
       console.warn("agents", "Ignoring bad usage record", root.path, e)

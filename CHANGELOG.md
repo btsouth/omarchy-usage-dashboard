@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Recover Codex limits when Omarchy's app-server reader intermittently times out on `account/read` or `account/rateLimits/read`. The dashboard refresh reads the RPC stream without text buffering and repairs affected records, including named Codex accounts with one configured home folder.
+- Recover Codex limits when Omarchy's app-server reader intermittently times out on `account/read` or `account/rateLimits/read`. The dashboard refresh reads the RPC stream without text buffering and repairs affected records, including named Codex accounts with one configured home folder. If another collector writes a timed-out record between refreshes, the bar keeps the last known limits with a stale label and requests an early refresh.
 
 ## 1.6.0 - 2026-09-22
 

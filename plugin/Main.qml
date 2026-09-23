@@ -117,8 +117,9 @@ Item {
 
   // A collector that could not reach its limits endpoint at all — typically
   // the seconds after login before the network is up — writes retryAdvised
-  // into its record. Honor it with one sooner try instead of waiting out the
-  // full refresh interval; a run that reaches the endpoint clears the flag.
+  // into its record. Codex's packaged collector can also time out on an RPC
+  // reply already buffered in its reader; its record names the failed method.
+  // Retry either failure sooner than the full refresh interval.
   // Only the advising agents rerun, so an outage at one provider does not
   // put every other collector on a 30-second treadmill.
   property var retryAgentIds: []
@@ -134,7 +135,9 @@ Item {
     var advising = []
     for (var i = 0; i < agents.length; i++) {
       var record = agents[i] ? agents[i].record : null
-      if (record && record.retryAdvised === true && providerEnabled(String(record.id || "")))
+      var codexTimeout = record && record.usageStatusText === "Codex limits unavailable"
+        && (record.authHelpText === "account/read" || record.authHelpText === "account/rateLimits/read")
+      if (record && (record.retryAdvised === true || codexTimeout) && providerEnabled(String(record.id || "")))
         advising.push(String(record.id))
     }
     retryAgentIds = advising
@@ -310,6 +313,7 @@ Item {
       // Rate limits and balances stay per-account and are never merged
       // across devices.
       limits: Array.isArray(record.limits) ? record.limits : [],
+      limitsStale: record.limitsStale === true,
       tierLabel: String(record.tierLabel || ""),
       balance: balanceValue(record.balance),
       resetCreditsAvailable: bankedResetsValue(record.resetCreditsAvailable),

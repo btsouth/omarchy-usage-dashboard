@@ -702,6 +702,15 @@ Panel {
               fontFamily: root.fontFamily
             }
 
+            Text {
+              visible: !!root.provider && root.provider.limitsStale === true
+              width: parent.width
+              text: "Last known limits · refreshing"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
             Repeater {
               model: root.limits
 
