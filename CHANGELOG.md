@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Refresh opt-in Codex banked-reset counts with the auth file belonging to each card's configured home. A spent credit on a second account no longer inherits Main's count; if the credit endpoint cannot be read, the count becomes unknown instead of displaying a stale positive number.
 - Recover Codex limits when Omarchy's app-server reader intermittently times out on `account/read` or `account/rateLimits/read`. The dashboard refresh reads the RPC stream without text buffering and repairs affected records, including named Codex accounts with one configured home folder. If another collector writes a timed-out record between refreshes, the bar keeps the last known limits with a stale label and requests an early refresh.
 
 ## 1.6.0 - 2026-09-22

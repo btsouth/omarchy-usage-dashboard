@@ -1,14 +1,64 @@
 import json
 import os
+import io
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
+
+import codex_limits
 
 ROOT = Path(__file__).parents[1]
 
 
 class CodexLimitRepairTests(unittest.TestCase):
+    def test_banked_resets_use_each_accounts_auth_and_clear_spent_credit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            main_home = root / '.codex'
+            second_home = root / 'second/.codex'
+            for folder, account in ((main_home, 'main-account'), (second_home, 'second-account')):
+                folder.mkdir(parents=True)
+                (folder / 'auth.json').write_text(json.dumps({'tokens': {
+                    'access_token': account + '-token', 'account_id': account}}))
+            config = root / 'config/omarchy/ai-usage/settings.json'
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps({'accounts': [{'id': 'codex-second', 'directories':
+                [{'provider': 'codex', 'path': str(second_home)}]}]}))
+            usage = root / 'state/omarchy/agents/usage'
+            usage.mkdir(parents=True)
+            for agent in ('codex', 'codex-second'):
+                (usage / (agent + '.json')).write_text(json.dumps({
+                    'id': agent, 'limits': [{'label': 'Weekly (7-day)', 'percent': 0.2}],
+                    'resetCreditsAvailable': 1}))
+            seen = []
+            def response(req, timeout):
+                token = req.get_header('Authorization')
+                account = req.get_header('Chatgpt-account-id')
+                seen.append((token, account))
+                count = 1 if account == 'main-account' else 0
+                return io.BytesIO(json.dumps({'available_count': count}).encode())
+            env = {'HOME': str(root), 'XDG_CONFIG_HOME': str(root / 'config'),
+                   'XDG_STATE_HOME': str(root / 'state'), 'CODEX_HOME': str(second_home)}
+            with patch.dict(os.environ, env), patch.object(codex_limits.request, 'urlopen', side_effect=response):
+                codex_limits.main()
+            self.assertEqual(seen, [('Bearer main-account-token', 'main-account'),
+                                    ('Bearer second-account-token', 'second-account')])
+            self.assertEqual(json.loads((usage / 'codex.json').read_text())['resetCreditsAvailable'], 1)
+            self.assertEqual(json.loads((usage / 'codex-second.json').read_text())['resetCreditsAvailable'], 0)
+
+    def test_failed_credit_lookup_marks_count_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'auth.json').write_text(json.dumps({'tokens': {
+                'access_token': 'token', 'account_id': 'account'}}))
+            record = root / 'codex.json'
+            record.write_text(json.dumps({'id': 'codex', 'limits': [], 'resetCreditsAvailable': 1}))
+            with patch.object(codex_limits.request, 'urlopen', side_effect=OSError('offline')):
+                self.assertTrue(codex_limits.repair(record, root))
+            self.assertIsNone(json.loads(record.read_text())['resetCreditsAvailable'])
+
     def test_repairs_failed_named_account_with_buffered_rpc_replies(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

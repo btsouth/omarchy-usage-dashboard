@@ -87,6 +87,8 @@ After every refresh, the dashboard compares each provider's limits against the p
 ~/.local/bin/omarchy-usage-dashboard-notify-resets --provider commandcode
 ```
 
+When an external Codex collector supplies a `resetCreditsAvailable` field, the dashboard refresh checks it against that card's Codex account using the local `auth.json`. The token is sent only to ChatGPT's credit endpoint. A failed check leaves the count unknown until the next successful refresh rather than showing an old credit.
+
 ## Supported sources
 
 | Source | Token history | Usage limits |

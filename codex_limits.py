@@ -16,6 +16,9 @@ import sys
 import tempfile
 import time
 from datetime import datetime, timezone
+from urllib import request
+
+RESET_CREDITS_URL = 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits'
 
 
 def rpc(proc, request_id, method, params=None, timeout=8):
@@ -108,17 +111,71 @@ def homes(config, default):
     return result
 
 
+def fetch_banked_resets(home):
+    """Read one account's spendable reset count from that home's credentials."""
+    auth = json.loads((Path(home) / 'auth.json').read_text())
+    tokens = auth.get('tokens') or {}
+    access_token = tokens.get('access_token')
+    account_id = tokens.get('account_id')
+    if not access_token or not account_id:
+        raise ValueError('Codex account credentials unavailable')
+    headers = {'Authorization': 'Bearer ' + access_token,
+               'ChatGPT-Account-Id': account_id,
+               'Accept': 'application/json', 'Cache-Control': 'no-cache',
+               'User-Agent': 'omarchy-usage-dashboard'}
+    with request.urlopen(request.Request(RESET_CREDITS_URL, headers=headers), timeout=10) as response:
+        payload = json.load(response)
+    if not isinstance(payload, dict):
+        raise ValueError('Unrecognized reset-credit response')
+    count = payload.get('available_count')
+    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+        return count
+    credits = payload.get('credits')
+    if not isinstance(credits, list):
+        raise ValueError('Unrecognized reset-credit response')
+    now = datetime.now(timezone.utc)
+    total = 0
+    for credit in credits:
+        if not isinstance(credit, dict) or credit.get('status') != 'available':
+            continue
+        expiry = credit.get('expires_at')
+        if expiry:
+            try:
+                if datetime.fromisoformat(str(expiry).replace('Z', '+00:00')) <= now:
+                    continue
+            except (ValueError, TypeError):
+                pass
+        total += 1
+    return total
+
+
 def repair(path, home):
     try:
         before = path.read_bytes()
         record = json.loads(before)
     except (OSError, ValueError):
         return False
-    if record.get('usageStatusText') != 'Codex limits unavailable' or record.get('authHelpText') not in ('account/read', 'account/rateLimits/read'):
-        return False
-    try:
-        limits, tier = fetch(home)
-    except (OSError, ValueError, RuntimeError, TimeoutError):
+    changed = False
+    if record.get('usageStatusText') == 'Codex limits unavailable' and record.get('authHelpText') in ('account/read', 'account/rateLimits/read'):
+        try:
+            limits, tier = fetch(home)
+        except (OSError, ValueError, RuntimeError, TimeoutError):
+            pass
+        else:
+            record.update(limits=limits, tierLabel=tier, usageStatusText='', authHelpText='Run `codex login` to authenticate.')
+            changed = True
+    # Custom collectors opt in by writing this field. Refresh it against the
+    # matching account, even when the limits RPC succeeded. A failed read is
+    # unknown, never a reason to keep displaying a possibly spent credit.
+    if 'resetCreditsAvailable' in record:
+        try:
+            count = fetch_banked_resets(home)
+        except (OSError, ValueError, RuntimeError, TimeoutError):
+            count = None
+        if record['resetCreditsAvailable'] != count:
+            record['resetCreditsAvailable'] = count
+            changed = True
+    if not changed:
         return False
     # A concurrent refresh owns a newer record; leave it alone.
     try:
@@ -126,7 +183,6 @@ def repair(path, home):
             return False
     except OSError:
         return False
-    record.update(limits=limits, tierLabel=tier, usageStatusText='', authHelpText='Run `codex login` to authenticate.')
     fd, temporary = tempfile.mkstemp(prefix='.' + path.name, dir=path.parent)
     try:
         with os.fdopen(fd, 'w') as output:
@@ -144,7 +200,9 @@ def main():
     home = Path.home()
     config = Path(os.environ.get('XDG_CONFIG_HOME', home / '.config')) / 'omarchy/ai-usage/settings.json'
     usage = Path(os.environ.get('XDG_STATE_HOME', home / '.local/state')) / 'omarchy/agents/usage'
-    for agent, folder in homes(config, Path(os.environ.get('CODEX_HOME', home / '.codex'))).items():
+    # The main card belongs to the default home. A caller may itself be
+    # running under another CODEX_HOME (for example a second Codex session).
+    for agent, folder in homes(config, home / '.codex').items():
         path = usage / (agent + '.json')
         if path.exists():
             repair(path, folder)
