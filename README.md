@@ -87,7 +87,9 @@ After every refresh, the dashboard compares each provider's limits against the p
 ~/.local/bin/omarchy-usage-dashboard-notify-resets --provider commandcode
 ```
 
-When an external Codex collector supplies a `resetCreditsAvailable` field, the dashboard refresh checks it against that card's Codex account using the local `auth.json`. The token is sent only to ChatGPT's credit endpoint. A failed check leaves the count unknown until the next successful refresh rather than showing an old credit.
+When an external Codex collector supplies a `resetCreditsAvailable` field, the dashboard refresh checks it against that card's Codex account using the local `auth.json`. The token is sent only to ChatGPT's credit endpoint. A failed check leaves the count unknown until the next successful refresh rather than showing an old credit. The panel also shows when the earliest unspent credit expires.
+
+Claude's banked resets are added to the Claude card the same way. Anthropic's usage endpoint only lists them for a current Claude Code CLI, so the refresh asks as the installed `claude` version, using the sign-in Claude Code already saved. The token is sent only to Anthropic's usage endpoint. The answer is reused for five minutes because the endpoint rate-limits quickly, and the panel shows when an unspent reset expires.
 
 ## Supported sources
 

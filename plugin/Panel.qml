@@ -69,6 +69,13 @@ Panel {
   // reports none -- though both stay off the panel, since a standing
   // "0 resets banked" line is noise on an account that never has any.
   readonly property int bankedResets: provider ? Number(provider.resetCreditsAvailable) : -1
+  // Promotional resets expire unspent, so the date rides along when known.
+  readonly property string bankedResetsExpiry: {
+    var expires = new Date(provider ? String(provider.resetCreditsExpiresAt || "") : "")
+    if (isNaN(expires.getTime())) return ""
+    return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][expires.getMonth()]
+      + " " + expires.getDate()
+  }
   // A prepaid account runs low the way a subscription window fills up: the
   // last 10% of the funded credits lights the same alarm.
   readonly property bool balanceAlarming: !!balance && balance.funded > 0
@@ -574,7 +581,7 @@ Panel {
                 required property var modelData
                 required property int index
 
-                text: ({"codex": "Main", "codex-second": "Second", "opencode-go": "OpenCode",
+                text: ({"codex": "Main", "codex-second": "Second", "claude": "Claude", "opencode-go": "OpenCode",
                         "ollama-cloud": "Ollama", "commandcode": "CommandCode", "clinepass": "ClinePass"})[modelData.providerId] || modelData.providerName
                 selected: index === root.providerIndex
                 hasCursor: root.cursorActive && index === root.providerIndex
@@ -724,7 +731,8 @@ Panel {
             Text {
               visible: root.bankedResets > 0
               width: parent.width
-              text: root.bankedResets === 1 ? "1 reset banked" : root.bankedResets + " resets banked"
+              text: (root.bankedResets === 1 ? "1 reset banked" : root.bankedResets + " resets banked")
+                + (root.bankedResetsExpiry ? " · expires " + root.bankedResetsExpiry : "")
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption

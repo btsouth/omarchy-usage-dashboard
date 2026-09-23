@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Show Claude's banked usage-limit resets on the Claude card, with the date an unspent reset expires. Anthropic's usage endpoint only returns them to a current Claude Code CLI, so the refresh identifies as the installed version, found on PATH or where Claude Code's installers put it. Answers are cached for five minutes, a rate-limited read waits out the endpoint's retry-after, and a failed read keeps the last answer for up to 30 minutes before the count becomes unknown. The panel holds the count while Omarchy's collector rewrites the record mid-refresh, so the line no longer blinks out when the panel opens. The Claude chip is labelled "Claude".
+- Show when Codex banked resets expire, from the earliest live credit's `expires_at` on the same credit endpoint the count comes from.
+- Restore the provider marks for Codex Second, CommandCode, ClinePass, Ollama Cloud, OpenCode Go, Grok, and Cursor. They were left behind when the private `bts.agents` clone was folded into this widget, so those tabs showed the generic glyph.
 - Refresh opt-in Codex banked-reset counts with the auth file belonging to each card's configured home. A spent credit on a second account no longer inherits Main's count; if the credit endpoint cannot be read, the count becomes unknown instead of displaying a stale positive number.
 - Recover Codex limits when Omarchy's app-server reader intermittently times out on `account/read` or `account/rateLimits/read`. The dashboard refresh reads the RPC stream without text buffering and repairs affected records, including named Codex accounts with one configured home folder. If another collector writes a timed-out record between refreshes, the bar keeps the last known limits with a stale label and requests an early refresh.
 

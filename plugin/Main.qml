@@ -317,6 +317,7 @@ Item {
       tierLabel: String(record.tierLabel || ""),
       balance: balanceValue(record.balance),
       resetCreditsAvailable: bankedResetsValue(record.resetCreditsAvailable),
+      resetCreditsExpiresAt: String(record.resetCreditsExpiresAt || ""),
 
       todayPrompts: synced ? numberValue(stats.todayPrompts) : numberValue(record.todayPrompts),
       todaySessions: synced ? numberValue(stats.todaySessions) : numberValue(record.todaySessions),

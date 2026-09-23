@@ -17,6 +17,10 @@ if command -v omarchy-agent-usage-refresh >/dev/null 2>&1; then
 elif command -v omarchy-agent-usage-update >/dev/null 2>&1; then
   timeout 60 omarchy-agent-usage-update "$@" || true
 fi
+# Omarchy's Claude collector just rewrote claude.json without banked limit
+# resets. Add them back first: this usually answers from its cache, so the
+# panel barely sees the record without them.
+python3 "$project_dir/claude_limits.py" "${force[@]}" || true
 # Repair the intermittent Codex app-server timeout in Omarchy's collector.
 # The helper only probes records that actually failed at account/read or
 # account/rateLimits/read, and knows the configured home for named accounts.

@@ -112,7 +112,8 @@ def homes(config, default):
 
 
 def fetch_banked_resets(home):
-    """Read one account's spendable reset count from that home's credentials."""
+    """Read one account's spendable reset count, and the earliest expiry among
+    its live credits, from that home's credentials."""
     auth = json.loads((Path(home) / 'auth.json').read_text())
     tokens = auth.get('tokens') or {}
     access_token = tokens.get('access_token')
@@ -127,26 +128,29 @@ def fetch_banked_resets(home):
         payload = json.load(response)
     if not isinstance(payload, dict):
         raise ValueError('Unrecognized reset-credit response')
-    count = payload.get('available_count')
-    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
-        return count
     credits = payload.get('credits')
-    if not isinstance(credits, list):
+    count = payload.get('available_count')
+    reported = isinstance(count, int) and not isinstance(count, bool) and count >= 0
+    if not reported and not isinstance(credits, list):
         raise ValueError('Unrecognized reset-credit response')
     now = datetime.now(timezone.utc)
-    total = 0
-    for credit in credits:
+    total, expiry = 0, None
+    for credit in credits if isinstance(credits, list) else []:
         if not isinstance(credit, dict) or credit.get('status') != 'available':
             continue
-        expiry = credit.get('expires_at')
-        if expiry:
-            try:
-                if datetime.fromisoformat(str(expiry).replace('Z', '+00:00')) <= now:
-                    continue
-            except (ValueError, TypeError):
-                pass
+        try:
+            ends = datetime.fromisoformat(str(credit.get('expires_at')).replace('Z', '+00:00'))
+        except (ValueError, TypeError):
+            ends = None
+        if ends and ends.tzinfo is None:
+            ends = ends.replace(tzinfo=timezone.utc)
+        if ends and ends <= now:
+            continue
         total += 1
-    return total
+        if ends and (expiry is None or ends < expiry):
+            expiry = ends
+    count = count if reported else total
+    return count, expiry.isoformat() if expiry and count else ''
 
 
 def repair(path, home):
@@ -169,11 +173,12 @@ def repair(path, home):
     # unknown, never a reason to keep displaying a possibly spent credit.
     if 'resetCreditsAvailable' in record:
         try:
-            count = fetch_banked_resets(home)
+            count, expiry = fetch_banked_resets(home)
         except (OSError, ValueError, RuntimeError, TimeoutError):
-            count = None
-        if record['resetCreditsAvailable'] != count:
+            count, expiry = None, ''
+        if record['resetCreditsAvailable'] != count or record.get('resetCreditsExpiresAt', '') != expiry:
             record['resetCreditsAvailable'] = count
+            record['resetCreditsExpiresAt'] = expiry
             changed = True
     if not changed:
         return False

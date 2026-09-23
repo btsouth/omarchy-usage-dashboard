@@ -38,6 +38,20 @@ Item {
         parsed.limitsStale = true
         parsed.retryAdvised = true
       }
+      // Omarchy's own collector rewrites the record without banked resets,
+      // and the dashboard refresh adds them back a moment later. Keep the
+      // last count through that gap so the line does not blink out on every
+      // refresh. A record that says null (a failed read) still clears it.
+      if (parsed && root.record && parsed.id === root.record.id
+          && parsed.resetCreditsAvailable === undefined
+          && root.record.resetCreditsAvailable !== undefined) {
+        parsed.resetCreditsAvailable = root.record.resetCreditsAvailable
+        parsed.resetCreditsExpiresAt = root.record.resetCreditsExpiresAt
+      }
+      if (parsed && root.record && parsed.id === root.record.id
+          && parsed.resetCreditsExpiresAt === undefined && parsed.resetCreditsAvailable !== null
+          && root.record.resetCreditsExpiresAt !== undefined)
+        parsed.resetCreditsExpiresAt = root.record.resetCreditsExpiresAt
       root.record = parsed && typeof parsed === "object" ? parsed : null
     } catch (e) {
       console.warn("agents", "Ignoring bad usage record", root.path, e)

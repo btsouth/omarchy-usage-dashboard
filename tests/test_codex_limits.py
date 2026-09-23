@@ -48,6 +48,24 @@ class CodexLimitRepairTests(unittest.TestCase):
             self.assertEqual(json.loads((usage / 'codex.json').read_text())['resetCreditsAvailable'], 1)
             self.assertEqual(json.loads((usage / 'codex-second.json').read_text())['resetCreditsAvailable'], 0)
 
+    def test_banked_resets_carry_the_earliest_live_expiry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'auth.json').write_text(json.dumps({'tokens': {
+                'access_token': 'token', 'account_id': 'account'}}))
+            record = root / 'codex.json'
+            record.write_text(json.dumps({'id': 'codex', 'limits': [], 'resetCreditsAvailable': 0}))
+            credits = [{'status': 'available', 'expires_at': '2099-11-01T00:00:00Z'},
+                       {'status': 'available', 'expires_at': '2099-10-22T20:37:57Z'},
+                       {'status': 'available', 'expires_at': '2000-01-01T00:00:00Z'},
+                       {'status': 'redeemed', 'expires_at': '2099-01-01T00:00:00Z'}]
+            body = json.dumps({'available_count': 2, 'credits': credits}).encode()
+            with patch.object(codex_limits.request, 'urlopen', return_value=io.BytesIO(body)):
+                self.assertTrue(codex_limits.repair(record, root))
+            saved = json.loads(record.read_text())
+            self.assertEqual(saved['resetCreditsAvailable'], 2)
+            self.assertEqual(saved['resetCreditsExpiresAt'], '2099-10-22T20:37:57+00:00')
+
     def test_failed_credit_lookup_marks_count_unknown(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -57,7 +75,9 @@ class CodexLimitRepairTests(unittest.TestCase):
             record.write_text(json.dumps({'id': 'codex', 'limits': [], 'resetCreditsAvailable': 1}))
             with patch.object(codex_limits.request, 'urlopen', side_effect=OSError('offline')):
                 self.assertTrue(codex_limits.repair(record, root))
-            self.assertIsNone(json.loads(record.read_text())['resetCreditsAvailable'])
+            saved = json.loads(record.read_text())
+            self.assertIsNone(saved['resetCreditsAvailable'])
+            self.assertEqual(saved['resetCreditsExpiresAt'], '')
 
     def test_repairs_failed_named_account_with_buffered_rpc_replies(self):
         with tempfile.TemporaryDirectory() as tmp:
