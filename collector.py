@@ -88,6 +88,7 @@ FIELDS = ('input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h', 'reasoni
 OVERRIDES = (('pricing.json', 'OpenCode Go official rates'),
              ('muse-pricing.json', 'Muse official rates'),
              ('codex-pricing.json', 'Codex model rates'),
+             ('claude-pricing.json', 'Claude model rates'),
              ('ollama-pricing.json', 'Ollama Cloud model rates'),
              ('commandcode-pricing.json', 'CommandCode model rates'),
              ('clinepass-pricing.json', 'ClinePass reference rates'))
@@ -1107,7 +1108,8 @@ def price(r, catalog):
     # CommandCode bills one resale table for the whole product, so both of its
     # wire-format routes read the same namespaced keys rather than falling
     # through to the lab's own list price for a same-named model.
-    if r['provider'] == 'commandcode': lookup = 'commandcode/' + model
+    if r['provider'] in ('commandcode', 'clinepass'):
+        lookup = r['provider'] + '/' + model
     rate = catalog.get(lookup)
     if not rate and r['provider'] not in ('ollama-cloud', 'commandcode', 'clinepass'):
         rate = catalog.get(model) or catalog.get('anthropic/' + model) or catalog.get('openai/' + model) or catalog.get('gemini/' + model)

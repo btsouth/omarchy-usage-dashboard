@@ -958,6 +958,39 @@ class CollectorTests(unittest.TestCase):
         spark = c.record('x', 'codex', 's', '2026-09-04T12:00:00Z', 'gpt-5.3-codex-spark', '/p', 'CLI', input=1_000_000)
         self.assertAlmostEqual(c.price(spark, rates)[0], 1.75, places=9)
 
+    def test_new_direct_model_rates_include_cache_and_long_context(self):
+        rates = c.load_rates()['document']
+        opus = c.record('o', 'claude', 's', 1, 'claude-opus-5-5', '/p', 'CLI',
+                        input=1_000_000, output=1_000_000, cacheRead=1_000_000,
+                        cacheWrite=2_000_000, cacheWrite1h=1_000_000)
+        self.assertAlmostEqual(c.price(opus, rates)[0], 4 + 20 + .2 + 5 + 8)
+        for model, output, long in [('gpt-6-sol', 10, 4 + 15 + .4 + 5),
+                                    ('gpt-6-luna', .5, .2 + .75 + .02 + .25)]:
+            with self.subTest(model=model):
+                row = c.record('g', 'codex', 's', 1, model, '/p', 'CLI',
+                               input=1_000_000, output=1_000_000,
+                               cacheRead=1_000_000, cacheWrite=1_000_000)
+                self.assertAlmostEqual(c.price(row, rates)[0], long)
+                row.update(input=50_000, cacheRead=50_000, cacheWrite=50_000)
+                rate = rates['codex/' + model]
+                expected = output + 50_000 * sum(rate[key] for key in (
+                    'input_cost_per_token', 'cache_read_input_token_cost',
+                    'cache_creation_input_token_cost'))
+                self.assertAlmostEqual(c.price(row, rates)[0], expected)
+
+    def test_new_commandcode_rates_keep_route_pricing(self):
+        rates = c.load_rates()['document']
+        for model, expected in [('xiaomi/mimo-v2.6-flash', .14 + .28 + .0028),
+                                ('xiaomi/mimo-v2.6-pro', .435 + .87 + .0036),
+                                ('xiaomi/mimo-v2.6-pro-ultraspeed', 4.35 + 8.7 + .036),
+                                ('gpt-6-sol', 2 + 10 + .2),
+                                ('gpt-6-luna', .1 + .5 + .01),
+                                ('claude-opus-5-5', 4 + 20 + .2)]:
+            with self.subTest(model=model):
+                row = c.record('x', 'commandcode', 's', 1, model, '/p', 'Hermes',
+                               input=1_000_000, output=1_000_000, cacheRead=1_000_000)
+                self.assertAlmostEqual(c.price(row, rates)[0], expected)
+
     def test_go_allowance_uses_monthly_window_and_promo(self):
         ledger = c.Ledger(self.root / 'allowance.sqlite')
         ledger.put(c.opencode_record('m1', 's', '2026-09-14T12:00:00Z', '/p', 'deepseek-v4.1-flash', 'opencode-go', {'input': 1_000_000}, 0))
@@ -1821,6 +1854,9 @@ class CollectorTests(unittest.TestCase):
         row['apiProvider'] = 'clinepass'
         value, _ = c.price(row, rates)
         self.assertAlmostEqual(value, 0.22, places=6)
+        # Hermes may record the API provider as cline-pass, while the account
+        # route remains clinepass. It uses the same resale rate.
+        self.assertAlmostEqual(c.price(dict(row, apiProvider='cline-pass'), rates)[0], 0.22)
         # The same model name on another route keeps that route's rate.
         other = c.record('b', 'ollama-cloud', 's', off_peak, 'deepseek-v4.1-flash', '/p', 'Hermes', input=1_000_000)
         other['apiProvider'] = 'ollama-cloud'

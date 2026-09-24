@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Price direct Claude Opus 5.5 and Codex GPT-6 Sol and Luna at their published rates, including cache and long-context pricing. Add CommandCode's published rates for those models and MiMo V2.6.
+- Price ClinePass rows whose wire provider says `cline-pass` through the ClinePass table. Previously those rows appeared unpriced despite a matching published rate.
+
 ## 1.7.0 - 2026-09-22
 
 - Show Claude's banked usage-limit resets on the Claude card, with the date an unspent reset expires. Anthropic's usage endpoint only returns them to a current Claude Code CLI, so the refresh identifies as the installed version, found on PATH or where Claude Code's installers put it. Answers are cached for five minutes, a rate-limited read waits out the endpoint's retry-after, and a failed read keeps the last answer for up to 30 minutes before the count becomes unknown. The panel holds the count while Omarchy's collector rewrites the record mid-refresh, so the line no longer blinks out when the panel opens. The Claude chip is labelled "Claude".

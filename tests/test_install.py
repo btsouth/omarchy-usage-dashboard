@@ -32,6 +32,7 @@ class InstallationTests(unittest.TestCase):
             runtime=home/'data'/APP/'app';self.assertTrue((runtime/'catalog.json').exists())
             self.assertTrue((runtime/'muse-pricing.json').exists())
             self.assertTrue((runtime/'codex-pricing.json').exists())
+            self.assertTrue((runtime/'claude-pricing.json').exists())
             self.assertTrue((runtime/'ollama-pricing.json').exists())
             self.assertTrue((runtime/'clinepass-pricing.json').exists())
             run('--with-plugin');self.assertEqual(before,registry.read_bytes())
