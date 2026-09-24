@@ -279,11 +279,11 @@ Panel {
       ? String(day.date)
       : dayName(day.date) + " " + (parsed.getMonth() + 1) + "/" + parsed.getDate()
     var text = label + " · " + usage.formatTokenCount(Number(day.messageCount || 0)) + " tokens"
-    // Prompt and session counts only exist for today, so they ride along here
+    // Request and session counts only exist for today, so they ride along here
     // instead of taking a section of their own. Billing-API agents never
-    // count prompts, and "0 prompts" would read as a quiet day, not a gap.
+    // count requests, and "0 requests" would read as a quiet day, not a gap.
     if (today && provider && provider.hasPromptStats !== false)
-      text += " · " + Number(provider.todayPrompts || 0) + " prompts · "
+      text += " · " + Number(provider.todayPrompts || 0) + " requests · "
         + Number(provider.todaySessions || 0) + " sessions"
     return text
   }
