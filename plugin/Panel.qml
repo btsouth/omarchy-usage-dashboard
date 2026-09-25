@@ -900,11 +900,12 @@ Panel {
             // Keep the complete outline inside the Flickable's clipping edge.
             x: Style.space(3)
             width: parent.width - Style.space(6)
+            label: "SOURCE"
             showLabel: false
             rowHeight: Style.space(42)
             value: root.selectedProviderId
             options: [{value: "all", label: "All sources"}].concat(root.providers.map(function(p) {
-              return {value: p.providerId, label: ({"codex": "Main", "codex-second": "Second", "claude-second": "Claude 2", "opencode-go": "OpenCode Go"})[p.providerId] || p.providerName}
+              return {value: p.providerId, label: ({"codex": "ChatGPT Main", "codex-second": "ChatGPT Second", "claude-second": "Claude Second", "opencode-go": "OpenCode Go"})[p.providerId] || p.providerName}
             }))
             foreground: root.foreground
             background: root.surface

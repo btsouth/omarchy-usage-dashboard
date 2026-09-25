@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise the real panel's model summary without opening a desktop window."""
+import argparse
 import datetime as dt
 import json
 import os
@@ -11,6 +12,10 @@ import time
 
 
 repo = Path(__file__).resolve().parents[1]
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--capture-source', type=Path, help='save an offscreen source picker image')
+parser.add_argument('--theme', choices=['dark', 'light'], default='dark')
+args = parser.parse_args()
 omarchy_ui = Path('/usr/share/omarchy/shell/Ui')
 omarchy_commons = Path('/usr/share/omarchy/shell/Commons')
 if not omarchy_ui.exists() or not omarchy_commons.exists():
@@ -42,6 +47,12 @@ Item {
 }
 ''')
     shutil.copytree(repo / 'plugin', root / 'plugin')
+    panel_file = root / 'plugin/Panel.qml'
+    panel_file.write_text(panel_file.read_text().replace(
+        '  function modelTooltip(row) {',
+        '  function qaSourcePicker() { return {label: providerSwitch.label, value: providerSwitch.value, text: providerSwitch.currentLabel()} }\n'
+        '  function qaCaptureSource(path) { return providerSwitch.grabToImage(function(image) { image.saveToFile(path) }) }\n\n'
+        '  function modelTooltip(row) {'))
     (root / 'shell.qml').write_text('''import QtQuick
 import QtQuick.Window
 import Quickshell
@@ -61,6 +72,9 @@ ShellRoot {
       return JSON.stringify(panel.models.map(row => ({name: row.name, total: row.total,
         details: panel.modelTooltip(row)})))
     }
+    function source(): string { return JSON.stringify(panel.qaSourcePicker()) }
+    function selectCodex(): void { panel.selectedProviderId = "codex" }
+    function captureSource(path: string): string { return String(panel.qaCaptureSource(path)) }
   }
 }
 ''')
@@ -81,6 +95,11 @@ ShellRoot {
     pins = root / 'config/omarchy/ai-usage/pinned-limit.json'
     pins.parent.mkdir(parents=True)
     pins.write_text(json.dumps({'pins': [{'provider': 'codex', 'label': 'Weekly (7-day)', 'title': 'Weekly'}]}))
+    theme = root / '.local/state/omarchy/current/theme/colors.toml'
+    theme.parent.mkdir(parents=True)
+    theme.write_text('background = "#151b18"\nforeground = "#e8e6da"\naccent = "#7aaf92"\n'
+                     if args.theme == 'dark' else
+                     'background = "#faf7f0"\nforeground = "#292d32"\naccent = "#28654a"\n')
     refresh = root / '.local/bin/omarchy-usage-dashboard-refresh'
     refresh.parent.mkdir(parents=True)
     refresh.write_text('#!/bin/sh\nexit 0\n')
@@ -108,7 +127,26 @@ ShellRoot {
             time.sleep(0.1)
         assert rows and [row['total'] for row in rows] == [375, 20], rows
         assert 'cache read 200' in rows[0]['details'], rows
-        print('Offscreen panel model rows and token details passed')
+        def ipc(method, *arguments):
+            call = subprocess.run(['quickshell', 'ipc', '-p', str(root), '--any-display',
+                                   'call', 'panelqa', method, *arguments], env=env,
+                                  capture_output=True, text=True, check=True)
+            return call.stdout.strip()
+        source = json.loads(ipc('source'))
+        assert source == {'label': 'SOURCE', 'value': 'all', 'text': 'All sources'}, source
+        if args.capture_source:
+            image_path = args.capture_source.resolve()
+            image_path.unlink(missing_ok=True)
+            assert ipc('captureSource', str(image_path)) == 'true'
+            for _ in range(30):
+                if image_path.exists(): break
+                time.sleep(0.1)
+            assert image_path.exists(), image_path
+            print('Captured source picker:', image_path)
+        ipc('selectCodex')
+        focused = json.loads(ipc('source'))
+        assert focused == {'label': 'SOURCE', 'value': 'codex', 'text': 'ChatGPT Main'}, focused
+        print('Offscreen panel model rows, token details, and source picker passed')
     finally:
         proc.terminate()
         try:

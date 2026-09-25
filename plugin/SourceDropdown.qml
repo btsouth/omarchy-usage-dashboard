@@ -6,8 +6,9 @@ import qs.Ui
 // Local source picker based on Omarchy's Dropdown. The shared control fixes
 // its trigger text at body size and can omit a resting outline, which makes
 // the full-width source control hard to read in this panel.
-// Trigger row paints with the kit's focus
-// chrome; the popup anchors below and uses Color.popups.background +
+// Trigger row paints with the kit's focus chrome. A compact inline label
+// keeps the selected source legible without making the panel taller.
+// The popup anchors below and uses Color.popups.background +
 // Color.popups.border so it reads as a panel surface rather than the
 // platform-native ComboBox look.
 //
@@ -103,6 +104,8 @@ Item {
       borderSpec: _borderSpec
 
       activeFocusOnTab: true
+      Accessible.name: root.label !== "" ? root.label + ": " + root.currentLabel() : root.currentLabel()
+      Accessible.role: Accessible.ComboBox
 
       HoverHandler {
         id: triggerHover
@@ -120,11 +123,37 @@ Item {
       }
 
       Text {
+        id: inlineLabel
         textFormat: Text.PlainText
+        visible: !root.showLabel && root.label !== ""
         anchors.left: parent.left
+        anchors.leftMargin: trigger.borderLeft + Style.spacing.controlPaddingX
+        anchors.verticalCenter: parent.verticalCenter
+        text: root.label
+        color: Qt.alpha(root.foreground, 0.62)
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        font.bold: true
+      }
+
+      Rectangle {
+        id: inlineDivider
+        visible: inlineLabel.visible
+        anchors.left: inlineLabel.right
+        anchors.leftMargin: Style.spacing.md
+        anchors.verticalCenter: parent.verticalCenter
+        width: Style.space(1)
+        height: Style.space(16)
+        color: Qt.alpha(root.foreground, 0.22)
+      }
+
+      Text {
+        textFormat: Text.PlainText
+        anchors.left: inlineDivider.visible ? inlineDivider.right : parent.left
         anchors.right: chevron.left
         anchors.verticalCenter: parent.verticalCenter
-        anchors.leftMargin: trigger.borderLeft + Style.spacing.controlPaddingX
+        anchors.leftMargin: inlineDivider.visible ? Style.spacing.md
+          : trigger.borderLeft + Style.spacing.controlPaddingX
         anchors.rightMargin: trigger.borderRight + Style.spacing.md
         text: root.currentLabel()
         color: root.foreground
@@ -139,10 +168,12 @@ Item {
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
         anchors.rightMargin: trigger.borderRight + Style.spacing.controlGap
-        text: "󰅀"
+        text: "⌄"
         color: Qt.darker(root.foreground, 1.2)
         font.family: root.fontFamily
         font.pixelSize: Style.font.body
+        rotation: popup.opened ? 180 : 0
+        Behavior on rotation { NumberAnimation { duration: 120 } }
       }
 
       MouseArea {
@@ -224,6 +255,17 @@ Item {
             color: index === optionList.currentIndex
               ? Style.hoverFillFor(root.foreground, root.accent)
               : "transparent"
+
+            Rectangle {
+              visible: root.optionValue(modelData) === root.value
+              anchors.left: parent.left
+              anchors.leftMargin: Style.spacing.xs
+              anchors.verticalCenter: parent.verticalCenter
+              width: Style.space(3)
+              height: Style.space(16)
+              radius: width / 2
+              color: root.accent
+            }
 
             Text {
               textFormat: Text.PlainText

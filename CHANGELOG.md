@@ -4,7 +4,8 @@
 
 - Agent Pulse adds a live Today counter from recorded local usage, hourly token history, a clearer source picker, reset-aware limits to watch, and up to three pinned limits. The dashboard brings the key totals and controls forward and keeps the full model, route, session, account, pricing, and coverage views.
 - Restore the bar panel's top-model breakdown across all routes. Returning to All sources in analytics now includes every source again; focusing an excluded source includes that source while leaving other exclusions in place.
-- Preserve existing settings, saved history, installed bar entries, and rollback records when upgrading from 1.7.0. The plugin manifest is marked `1.8.0-rc.1` while this candidate is reviewed.
+- Show SOURCE inside the bar panel's picker, use full account names, and mark the selected menu row without increasing the trigger height.
+- Preserve existing settings, saved history, installed bar entries, and rollback records when upgrading from 1.7.0. The plugin manifest is marked `1.8.0-rc.2` while this candidate is reviewed.
 - Price direct Claude Opus 5.5 and Codex GPT-6 Sol and Luna at their published rates, including cache and long-context pricing. Add CommandCode's published rates for those models and MiMo V2.6.
 - Price ClinePass rows whose wire provider says `cline-pass` through the ClinePass table. Previously those rows appeared unpriced despite a matching published rate.
 
