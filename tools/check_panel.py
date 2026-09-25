@@ -145,7 +145,7 @@ ShellRoot {
             print('Captured source picker:', image_path)
         ipc('selectCodex')
         focused = json.loads(ipc('source'))
-        assert focused == {'label': 'SOURCE', 'value': 'codex', 'text': 'ChatGPT Main'}, focused
+        assert focused == {'label': 'SOURCE', 'value': 'codex', 'text': 'Main'}, focused
         print('Offscreen panel model rows, token details, and source picker passed')
     finally:
         proc.terminate()

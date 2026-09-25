@@ -17,7 +17,7 @@ The candidate adds a recorded Today counter, event-timed hourly tokens, reset-aw
 ## Checks completed
 
 - 177 unit tests, Python compilation, shell syntax checks, and QML syntax parsing passed.
-- The restored model rows and panel source picker loaded in an isolated Quickshell runtime with synthetic provider records. The token components, tooltip totals, and source labels matched. The compositor popup was stubbed for this check.
+- The restored model rows and panel source picker loaded in an isolated Quickshell runtime with synthetic provider records. The token components, tooltip totals, and compact source labels matched. The compositor popup was stubbed for this check.
 - The offscreen dashboard check passed at 1000 × 640: source selection, 12/24-hour labels, three pins and individual unpin, live counter updates, and account editing.
 - An isolated v1.7.0 to candidate install preserved settings, ledger bytes, the existing bar entry, and the installer registry, and staged the new QML files and restored model section.
 - A synthetic 10,000-file Codex history took 0.41 seconds on the first local pulse and 0.16 seconds on two unchanged pulses on the development machine. Empty files measure discovery overhead, not real parsing or a user's full history.
