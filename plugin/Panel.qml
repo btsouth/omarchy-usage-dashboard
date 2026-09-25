@@ -116,8 +116,11 @@ Panel {
   component QuietScrollBar: ScrollBar {
     id: quiet
     policy: ScrollBar.AsNeeded
-    padding: 0
-    implicitWidth: Style.space(6)
+    leftPadding: Style.space(4)
+    rightPadding: Style.space(4)
+    topPadding: 0
+    bottomPadding: 0
+    implicitWidth: Style.space(12)
     background: Item {}
     contentItem: Rectangle {
       implicitWidth: Style.space(4)
@@ -688,6 +691,17 @@ Panel {
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
         interactive: contentHeight > height
+
+        // The attached control moves the Flickable when dragged. Keep it
+        // outside the clipped content while retaining that connection.
+        ScrollBar.vertical: QuietScrollBar {
+          id: panelScroll
+          parent: keyCatcher
+          x: panelFlick.x + panelFlick.width + Style.space(1)
+          y: panelFlick.y
+          height: panelFlick.height
+          interactive: true
+        }
 
         Column {
           id: column
@@ -1291,19 +1305,6 @@ Panel {
             elide: Text.ElideRight
           }
         }
-      }
-
-      // Parented to the key catcher, not the Flickable: a child of the
-      // clipping Flickable would be clipped away and paint nothing.
-      QuietScrollBar {
-        parent: keyCatcher
-        x: panelFlick.x + panelFlick.width + Style.space(4)
-        y: panelFlick.y
-        height: panelFlick.height
-        orientation: Qt.Vertical
-        active: panelFlick.moving || panelFlick.flicking
-        size: panelFlick.contentHeight > 0 ? panelFlick.height / panelFlick.contentHeight : 1
-        position: panelFlick.contentHeight > 0 ? panelFlick.contentY / panelFlick.contentHeight : 0
       }
     }
   }

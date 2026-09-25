@@ -6,7 +6,8 @@
 - Restore the bar panel's top-model breakdown across all routes. Returning to All sources in analytics now includes every source again; focusing an excluded source includes that source while leaving other exclusions in place.
 - Show SOURCE inside the bar panel's picker and mark the selected menu row without increasing the trigger height. Keep the compact Main and Second labels.
 - Put the panel source picker first, beside Analytics, so source focus stays visible above the totals and pinned limits.
-- Preserve existing settings, saved history, installed bar entries, and rollback records when upgrading from 1.7.0. The plugin manifest is marked `1.8.0-rc.3` while this candidate is reviewed.
+- Make the panel scrollbar drag the content, and widen its invisible drag target while keeping the narrow thumb.
+- Preserve existing settings, saved history, installed bar entries, and rollback records when upgrading from 1.7.0. The plugin manifest is marked `1.8.0-rc.4` while this candidate is reviewed.
 - Price direct Claude Opus 5.5 and Codex GPT-6 Sol and Luna at their published rates, including cache and long-context pricing. Add CommandCode's published rates for those models and MiMo V2.6.
 - Price ClinePass rows whose wire provider says `cline-pass` through the ClinePass table. Previously those rows appeared unpriced despite a matching published rate.
 

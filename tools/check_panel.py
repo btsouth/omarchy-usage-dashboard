@@ -17,6 +17,7 @@ parser.add_argument('--capture-source', type=Path, help='save an offscreen sourc
 parser.add_argument('--capture-header', type=Path, help='save the offscreen panel header image')
 parser.add_argument('--theme', choices=['dark', 'light'], default='dark')
 parser.add_argument('--panel-width', type=int, default=460)
+parser.add_argument('--panel-height', type=int, default=360)
 args = parser.parse_args()
 omarchy_ui = Path('/usr/share/omarchy/shell/Ui')
 omarchy_commons = Path('/usr/share/omarchy/shell/Commons')
@@ -43,11 +44,11 @@ Item {
   property int contentWidth: 460
   property int contentHeight: 900
   function fittedContentWidth(value) { return Math.min(value, PANEL_WIDTH) }
-  function fittedContentHeight(value, maximum) { return Math.min(value, maximum) }
+  function fittedContentHeight(value, maximum) { return Math.min(value, maximum, PANEL_HEIGHT) }
   width: contentWidth
   height: contentHeight
 }
-'''.replace('PANEL_WIDTH', str(args.panel_width)))
+'''.replace('PANEL_WIDTH', str(args.panel_width)).replace('PANEL_HEIGHT', str(args.panel_height)))
     shutil.copytree(repo / 'plugin', root / 'plugin')
     panel_file = root / 'plugin/Panel.qml'
     panel_file.write_text(panel_file.read_text().replace(
@@ -56,9 +57,14 @@ Item {
         '  function qaHeader() { return {pickerX: providerSwitch.mapToItem(column, 0, 0).x, pickerY: providerSwitch.mapToItem(column, 0, 0).y, pickerWidth: providerSwitch.width, buttonX: analyticsButton.mapToItem(column, 0, 0).x, buttonY: analyticsButton.mapToItem(column, 0, 0).y, buttonWidth: analyticsButton.width, columnWidth: column.width, pinnedY: pinnedSection.y} }\n'
         '  function qaCaptureSource(path) { return providerSwitch.grabToImage(function(image) { image.saveToFile(path) }) }\n\n'
         '  function qaCaptureHeader(path) { return headerControls.grabToImage(function(image) { image.saveToFile(path) }) }\n\n'
+        '  function qaScrollState() { return {contentY: panelFlick.contentY, contentHeight: panelFlick.contentHeight, height: panelFlick.height, size: panelScroll.size, position: panelScroll.position, width: panelScroll.width, visible: panelScroll.visible, outsideClip: panelScroll.parent === keyCatcher} }\n'
+        '  function qaScrollDown() { panelScroll.increase(); return qaScrollState() }\n\n'
+        '  function qaScrollBar() { return panelScroll }\n'
+        '  function qaResetScroll() { panelFlick.contentY = 0 }\n\n'
         '  function modelTooltip(row) {'))
     (root / 'shell.qml').write_text('''import QtQuick
 import QtQuick.Window
+import QtTest
 import Quickshell
 import Quickshell.Io
 import "plugin" as Plugin
@@ -70,6 +76,8 @@ ShellRoot {
     color: "#151b18"
     Plugin.Panel { id: panel; width: 460; height: 20 }
   }
+  // Keep the QtTest pointer helper available for IPC without auto-running a test suite.
+  TestCase { id: dragDriver; name: "PanelScrollDrag"; when: false }
   IpcHandler {
     target: "panelqa"
     function inspect(): string {
@@ -81,6 +89,14 @@ ShellRoot {
     function selectCodex(): void { panel.selectedProviderId = "codex" }
     function captureSource(path: string): string { return String(panel.qaCaptureSource(path)) }
     function captureHeader(path: string): string { return String(panel.qaCaptureHeader(path)) }
+    function scrollState(): string { return JSON.stringify(panel.qaScrollState()) }
+    function scrollDown(): string { return JSON.stringify(panel.qaScrollDown()) }
+    function dragScroll(): string {
+      panel.qaResetScroll()
+      var scroll = panel.qaScrollBar()
+      dragDriver.mouseDrag(scroll, scroll.width / 2, Math.max(8, scroll.size * scroll.height / 2), 0, 120)
+      return JSON.stringify(panel.qaScrollState())
+    }
   }
 }
 ''')
@@ -164,10 +180,17 @@ ShellRoot {
                 time.sleep(0.1)
             assert image_path.exists(), image_path
             print('Captured panel header:', image_path)
+        before_scroll = json.loads(ipc('scrollState'))
+        after_scroll = json.loads(ipc('scrollDown'))
+        assert before_scroll['contentHeight'] > before_scroll['height'], before_scroll
+        assert before_scroll['visible'] and before_scroll['outsideClip'] and before_scroll['width'] >= 12, before_scroll
+        assert after_scroll['contentY'] > before_scroll['contentY'], (before_scroll, after_scroll)
+        dragged = json.loads(ipc('dragScroll'))
+        assert dragged['contentY'] > 0, dragged
         ipc('selectCodex')
         focused = json.loads(ipc('source'))
         assert focused == {'label': 'SOURCE', 'value': 'codex', 'text': 'Main'}, focused
-        print('Offscreen panel model rows, token details, and source picker passed')
+        print('Offscreen panel model rows, source picker, and attached scrollbar passed')
     finally:
         proc.terminate()
         try:
