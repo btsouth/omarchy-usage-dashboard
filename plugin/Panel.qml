@@ -694,19 +694,51 @@ Panel {
           width: panelFlick.width
           spacing: Style.space(12)
 
-          Button {
-            id: analyticsButton
+          RowLayout {
+            id: headerControls
             width: parent.width
-            text: "Open analytics  ↗"
-            Accessible.name: "Open Agent Pulse analytics"
-            selected: true
-            focusable: true
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            verticalPadding: Style.space(12)
-            onClicked: {
-              Quickshell.execDetached([Quickshell.env("HOME") + "/.local/bin/omarchy-usage-dashboard"])
-              root.close()
+            spacing: Style.space(8)
+
+            SourceDropdown {
+              id: providerSwitch
+              visible: root.providers.length > 1
+              // Inset the picker so its full outline stays inside the clip.
+              Layout.leftMargin: Style.space(3)
+              Layout.fillWidth: true
+              Layout.minimumWidth: Style.space(120)
+              label: "SOURCE"
+              showLabel: false
+              rowHeight: Style.space(42)
+              value: root.selectedProviderId
+              options: [{value: "all", label: "All sources"}].concat(root.providers.map(function(p) {
+                return {value: p.providerId, label: ({"codex": "Main", "codex-second": "Second", "claude-second": "Claude 2", "opencode-go": "OpenCode Go"})[p.providerId] || p.providerName}
+              }))
+              foreground: root.foreground
+              background: root.surface
+              fontFamily: root.fontFamily
+              onChanged: function(value) { root.selectedProviderId = value }
+              Connections {
+                target: root
+                function onSelectedProviderIdChanged() { providerSwitch.value = root.selectedProviderId }
+              }
+            }
+
+            Button {
+              id: analyticsButton
+              Layout.preferredWidth: implicitWidth
+              Layout.fillWidth: !providerSwitch.visible
+              Layout.rightMargin: Style.space(3)
+              text: "Analytics ↗"
+              Accessible.name: "Open Agent Pulse analytics"
+              selected: true
+              focusable: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              verticalPadding: Style.space(10)
+              onClicked: {
+                Quickshell.execDetached([Quickshell.env("HOME") + "/.local/bin/omarchy-usage-dashboard"])
+                root.close()
+              }
             }
           }
 
@@ -892,32 +924,6 @@ Panel {
             horizontalAlignment: Text.AlignHCenter
             wrapMode: Text.WordWrap
           }
-
-          // ---------- Source focus ----------
-          SourceDropdown {
-            id: providerSwitch
-            visible: root.providers.length > 1
-            // Keep the complete outline inside the Flickable's clipping edge.
-            x: Style.space(3)
-            width: parent.width - Style.space(6)
-            label: "SOURCE"
-            showLabel: false
-            rowHeight: Style.space(42)
-            value: root.selectedProviderId
-            options: [{value: "all", label: "All sources"}].concat(root.providers.map(function(p) {
-              return {value: p.providerId, label: ({"codex": "Main", "codex-second": "Second", "claude-second": "Claude 2", "opencode-go": "OpenCode Go"})[p.providerId] || p.providerName}
-            }))
-            foreground: root.foreground
-            background: root.surface
-            fontFamily: root.fontFamily
-            onChanged: function(value) { root.selectedProviderId = value }
-            Connections {
-              target: root
-              function onSelectedProviderIdChanged() { providerSwitch.value = root.selectedProviderId }
-            }
-          }
-
-          PanelSeparator { visible: root.providers.length > 0; foreground: root.foreground }
 
           PanelSeparator { visible: root.allSelected && root.allLimitRows().length > 0; foreground: root.foreground }
 

@@ -14,7 +14,9 @@ import time
 repo = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--capture-source', type=Path, help='save an offscreen source picker image')
+parser.add_argument('--capture-header', type=Path, help='save the offscreen panel header image')
 parser.add_argument('--theme', choices=['dark', 'light'], default='dark')
+parser.add_argument('--panel-width', type=int, default=460)
 args = parser.parse_args()
 omarchy_ui = Path('/usr/share/omarchy/shell/Ui')
 omarchy_commons = Path('/usr/share/omarchy/shell/Commons')
@@ -40,18 +42,20 @@ Item {
   property Item focusTarget
   property int contentWidth: 460
   property int contentHeight: 900
-  function fittedContentWidth(value) { return value }
+  function fittedContentWidth(value) { return Math.min(value, PANEL_WIDTH) }
   function fittedContentHeight(value, maximum) { return Math.min(value, maximum) }
   width: contentWidth
   height: contentHeight
 }
-''')
+'''.replace('PANEL_WIDTH', str(args.panel_width)))
     shutil.copytree(repo / 'plugin', root / 'plugin')
     panel_file = root / 'plugin/Panel.qml'
     panel_file.write_text(panel_file.read_text().replace(
         '  function modelTooltip(row) {',
         '  function qaSourcePicker() { return {label: providerSwitch.label, value: providerSwitch.value, text: providerSwitch.currentLabel()} }\n'
+        '  function qaHeader() { return {pickerX: providerSwitch.mapToItem(column, 0, 0).x, pickerY: providerSwitch.mapToItem(column, 0, 0).y, pickerWidth: providerSwitch.width, buttonX: analyticsButton.mapToItem(column, 0, 0).x, buttonY: analyticsButton.mapToItem(column, 0, 0).y, buttonWidth: analyticsButton.width, columnWidth: column.width, pinnedY: pinnedSection.y} }\n'
         '  function qaCaptureSource(path) { return providerSwitch.grabToImage(function(image) { image.saveToFile(path) }) }\n\n'
+        '  function qaCaptureHeader(path) { return headerControls.grabToImage(function(image) { image.saveToFile(path) }) }\n\n'
         '  function modelTooltip(row) {'))
     (root / 'shell.qml').write_text('''import QtQuick
 import QtQuick.Window
@@ -73,8 +77,10 @@ ShellRoot {
         details: panel.modelTooltip(row)})))
     }
     function source(): string { return JSON.stringify(panel.qaSourcePicker()) }
+    function header(): string { return JSON.stringify(panel.qaHeader()) }
     function selectCodex(): void { panel.selectedProviderId = "codex" }
     function captureSource(path: string): string { return String(panel.qaCaptureSource(path)) }
+    function captureHeader(path: string): string { return String(panel.qaCaptureHeader(path)) }
   }
 }
 ''')
@@ -134,6 +140,12 @@ ShellRoot {
             return call.stdout.strip()
         source = json.loads(ipc('source'))
         assert source == {'label': 'SOURCE', 'value': 'all', 'text': 'All sources'}, source
+        header = json.loads(ipc('header'))
+        assert header['pickerY'] == 0 and abs(header['buttonY'] - header['pickerY']) <= 3, header
+        assert header['pickerX'] >= 3 and header['pickerWidth'] >= 120, header
+        assert header['buttonX'] > header['pickerX'] + header['pickerWidth'], header
+        assert header['buttonX'] + header['buttonWidth'] < header['columnWidth'], header
+        assert header['pinnedY'] > header['pickerY'], header
         if args.capture_source:
             image_path = args.capture_source.resolve()
             image_path.unlink(missing_ok=True)
@@ -143,6 +155,15 @@ ShellRoot {
                 time.sleep(0.1)
             assert image_path.exists(), image_path
             print('Captured source picker:', image_path)
+        if args.capture_header:
+            image_path = args.capture_header.resolve()
+            image_path.unlink(missing_ok=True)
+            assert ipc('captureHeader', str(image_path)) == 'true'
+            for _ in range(30):
+                if image_path.exists(): break
+                time.sleep(0.1)
+            assert image_path.exists(), image_path
+            print('Captured panel header:', image_path)
         ipc('selectCodex')
         focused = json.loads(ipc('source'))
         assert focused == {'label': 'SOURCE', 'value': 'codex', 'text': 'Main'}, focused
