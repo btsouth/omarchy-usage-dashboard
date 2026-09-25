@@ -18,7 +18,7 @@ An account can combine Codex, Claude, and other source folders. OpenCode and Ope
 
 A Hermes home (`~/.hermes`) carries every route Hermes bills. Choose the route it belongs to (OpenCode Go, Ollama Cloud, CommandCode, or ClinePass) when you add the folder, and add further entries for the other routes if you want them labelled; the folder itself holds one database. Put it under the account whose history it belongs to, so the two clients' usage for that account compares on one card instead of splitting across two.
 
-The account filter applies to charts, totals, and breakdowns. When a provider has more than one account, the daily and hourly charts draw one series per account in its own shade of the provider color: the largest account solid, the others dashed, each labelled in the hover card. The overview shows one card per account, and the Accounts table compares account/source pairs and opens their recorded sessions. Renaming an account changes its label without reimporting tokens.
+The account filter applies to charts, totals, and breakdowns. The Today chart colors event-timed usage by source; the daily chart shows the filtered total. The source comparison keeps each account separate, and the Accounts table compares account/source pairs and opens their recorded sessions. Renaming an account changes its label without reimporting tokens.
 
 ## Copies and retained history
 

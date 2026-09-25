@@ -1,4 +1,4 @@
-# AI Usage Dashboard for Omarchy
+# Agent Pulse for Omarchy
 
 [![Checks](https://github.com/btsouth/omarchy-usage-dashboard/actions/workflows/check.yml/badge.svg)](https://github.com/btsouth/omarchy-usage-dashboard/actions/workflows/check.yml)
 
@@ -24,13 +24,13 @@ cd omarchy-usage-dashboard
 python3 install.py --with-plugin
 ```
 
-Open the new bar widget and click **Open analytics**, or search for **AI Usage Dashboard** in your application menu. Both open the same dashboard.
+Open the new bar widget and click **Open analytics**, or search for **Agent Pulse** in your application menu. Both open the same dashboard.
 
 ### Using it instead of the built-in widget
 
-The installer adds **AI Usage Dashboard** alongside Omarchy's built-in **Agents** widget. It does not automatically replace it, and it says so when another installed widget serves the same job, naming the plugin it found.
+The installer adds **Agent Pulse** alongside Omarchy's built-in **Agents** widget. It does not automatically replace it, and it says so when another installed widget serves the same job, naming the plugin it found.
 
-For a single AI icon, remove the old Agents widget from your bar layout after installing. Keep the new AI Usage Dashboard widget: it covers Codex, Claude, and Fireworks like the built-in one (Fireworks starts off; enable it in Settings), and adds the providers, ordering, launch commands, and notifications described below. Omarchy's packaged files are unchanged, and you can add the original widget back later.
+For a single AI icon, remove the old Agents widget from your bar layout after installing. Keep the new Agent Pulse widget: it covers Codex, Claude, and Fireworks like the built-in one (Fireworks starts off; enable it in Settings), and adds the providers, ordering, launch commands, and notifications described below. Omarchy's packaged files are unchanged, and you can add the original widget back later.
 
 If the new widget does not appear, run:
 
@@ -52,14 +52,19 @@ Both install options run without sudo and keep working if you move or delete the
 
 ## Features
 
-- Today, 7-day, 30-day, 90-day, and yearly trends, with hourly detail.
+- A live Today count that checks local agent histories every 15 seconds while the panel or dashboard is open and rolls up to each newly recorded total, plus exact hourly totals and source segments.
+- 7-day, 30-day, 90-day, and yearly trends, with a daily chart and a full-screen breakdown.
 - Input, output, and cache totals, estimated API value, and provider comparisons.
 - Breakdowns by model, project, client, model provider, account, and session.
 - Named accounts with multiple history folders and deduplication of copied records.
 - Synced machine ledgers: one shared folder, with each machine importing the others so all stats appear in one dashboard.
-- Available usage limits, optional monthly plan comparisons, and Omarchy theme colors.
+- Available usage limits, up to three limits you can pin to the panel and dashboard overview, optional monthly plan prices, and Omarchy theme colors.
 - Desktop notifications when a weekly or monthly limit resets or banked reset credits arrive, with the provider's own mark on the popup.
-- A bar widget that reorders providers, launches each agent's own CLI on right-click, and admits extra providers of your own.
+- A bar widget with the latest six hourly token totals, reset-aware limit meters, agent launch commands, and extra providers of your own.
+
+The hourly bars show event-timed usage in your local time zone. Hour labels, reset times, and dashboard timestamps follow the 12- or 24-hour format selected for Omarchy's bar clock. Hermes reports accumulating session totals without request timestamps. Those tokens remain in the day total and are shown separately as having no exact hour. Agent Pulse checks local histories every 15 seconds while a view is open. Counts advance when an agent records usage, usually after a model response, rather than estimating tokens mid-stream. The full history, synced ledgers, and provider limits still refresh on their normal schedule. The dashboard starts on Today. Source, account, and model controls live under Filters, while Settings separates sources, accounts, pricing, sync, and appearance.
+
+To keep limits visible, open each source in the bar panel and choose **Pin** beside a limit. Up to three pins appear together on the panel's main view and at the top of the dashboard, each with its usage and reset time. **Unpin** removes one limit. The panel also shows three separate "Limits to watch" suggestions, with all reset times above the hourly history.
 
 ## Bar widget settings
 
@@ -119,11 +124,11 @@ Normal ChatGPT, Grok web, and Gemini web conversations are not included. Copilot
 
 ## Multiple accounts
 
-Under **Settings → History accounts**, add a name and one or more agent home folders, such as `/mnt/work/.codex` and `/mnt/work/.claude`. Filter by account or use the Accounts breakdown to compare them.
+Under **Settings → Accounts**, add a name and one or more agent home folders, such as `/mnt/work/.codex` and `/mnt/work/.claude`. Filter by account or use the Accounts breakdown to compare them.
 
 Folders must already be available locally or mounted. The dashboard does not sync files. Copied records count once; conflicting account assignments are flagged.
 
-Account labels group history, not credentials. **All accounts** shows the current login's quota on this PC, and a labelled account whose usage record carries the same id or name shows its own limits beside it. The overview gives each labelled account its own card, and the daily and hourly charts draw one series per account in its own shade of the provider color, solid for the largest and dashed for the others. Optional monthly prices apply to the local history group when set on a provider, or to one account when set on its label; imported history never inherits the local price. See [account setup](docs/accounts.md).
+Account labels group history, not credentials. **All accounts** shows the current login's quota on this PC, and a labelled account whose usage record carries the same id or name shows its own limits beside it. The source comparison keeps each labelled account separate. The hourly chart uses source colors, while the daily chart shows the filtered total. Optional monthly prices apply to the local history group when set on a provider, or to one account when set on its label; imported history never inherits the local price. See [account setup](docs/accounts.md).
 
 ## Understanding the numbers
 
@@ -131,8 +136,8 @@ Account labels group history, not credentials. **All accounts** shows the curren
 - **API value** uses recorded estimates or catalog prices. OpenCode Go follows the documented model rates, including peak-hour doubling for DeepSeek and the per-model monthly allowances shown on the Go card. Ollama Cloud and CommandCode follow their own published rates, each including that provider's peak window for the DeepSeek models. ClinePass follows the reference rates its own documentation publishes for a flat-rate subscription. It is not your subscription bill. Missing prices stay marked as unpriced.
 - **Per-session averages** cover recorded activity in the selected period. A session is not a completed task or a model-efficiency benchmark.
 - **Models** are counted once per model across the routes that served it, so a model reached through more than one provider is a single row. Its detail shows the split by route and the model string each route recorded. Prices are unaffected: every route's tokens are priced at that route's own rates and then added up.
-- **Filter by model** to narrow the whole page to one model, across every route that served it. The summary cards, the chart, the provider cards, the breakdown table, and the Go allowance card then describe only that model, so its cached and uncached input, its output, its cache savings, and its API value are all its own. Choose one from the row under the accounts, or open a Models-table row, which also jumps to that model's sessions. Changing the period keeps the filter, so DeepSeek at 30 days is one more click.
-- **Switch a source off** in the source row at the top to leave its history out of the view. The chip goes struck through, the filter line names it, and the summary, the chart, the cards, and every breakdown drop it together. This is a view filter only: Settings controls visible providers and optional quota collection. Local transcript history continues to be indexed during scans. **Overview** puts every source back.
+- **Filter by model** under Filters to narrow the whole page to one model, across every route that served it. The summary, chart, source comparison, breakdown table, and Go allowance then describe only that model. A Models-table row also opens that model's sessions. Changing the period keeps the model filter.
+- **Exclude a source** under Filters to leave its history out of the view. The summary, chart, source comparison, and every breakdown update together. This is a view filter only: Settings controls visible providers and optional quota collection. Local transcript history continues to be indexed during scans. Use the source picker to focus on one source. Choosing **All sources** clears source exclusions and shows every enabled source again; other filters stay in place.
 
 History refreshes every 15 minutes, along with OpenCode Go, Ollama Cloud, CommandCode, ClinePass, and enabled Grok quota. **Refresh** also requests fresh Codex and Claude limits from Omarchy. See [pricing details](docs/pricing.md) for rates and accounting.
 
