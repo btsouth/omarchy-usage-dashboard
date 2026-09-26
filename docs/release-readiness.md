@@ -23,10 +23,10 @@ The candidate adds a recorded Today counter, event-timed hourly tokens, reset-aw
 - A synthetic 10,000-file Codex history took 0.41 seconds on the first local pulse and 0.16 seconds on two unchanged pulses on the development machine. Empty files measure discovery overhead, not real parsing or a user's full history.
 - On the development machine's real 3 GB Codex history, a pulse with nothing new took about 0.12 seconds of wall and CPU time. A copy of its largest transcript (275 MB) cost 1.4 seconds on first read and about 0.65 seconds of CPU on each pulse after the file grew, since a changed file is read again from the start. That is roughly 4% of one core while a view is open and such a session is active. Peak memory was about 80 MB. Pulses that overlapped a full refresh waited on the collector lock instead of working.
 - The candidate ran on the author's Omarchy desktop in daily use, including the bar panel, source picker, pinned limits, and analytics.
+- The project page's panel image (`docs/media/panel.png`) is the real panel in an isolated Omarchy desktop with generated records, replacing the labelled section map.
 
 ## Before public release
 
 1. Review PR #7 out of draft, including CodeRabbit's review, and resolve every comment.
-2. Replace the project page's labelled panel section map with a real panel capture, or drop its "will be updated" note.
-3. Merge, tag `v1.8.0`, and verify the default installer path and the installed UI.
-4. Later: read changed transcripts from the last parsed offset so an active long session is not reread in full on each pulse.
+2. Merge, tag `v1.8.0`, and verify the default installer path and the installed UI.
+3. Later: read changed transcripts from the last parsed offset so an active long session is not reread in full on each pulse.

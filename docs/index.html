@@ -59,13 +59,7 @@ h2{font-size:clamp(28px,3.6vw,40px);line-height:1.1;letter-spacing:-.02em;margin
 .feat li{margin:6px 0}
 .shot{border-radius:6px;overflow:hidden;border:1px solid var(--bd);background:var(--sf);box-shadow:0 18px 50px rgba(0,0,0,.35)}
 .shot img{display:block;width:100%;height:auto}
-.panelmap{background:var(--sf);border:1px solid var(--bd);border-radius:6px;padding:24px;max-width:460px;width:100%;box-sizing:border-box;margin:auto;font-family:"IBM Plex Mono",monospace}
-.panelmap .title{color:var(--ink2);font-size:23px;font-weight:600;padding-bottom:15px;border-bottom:1px solid var(--bd)}
-.panelmap .section{padding:13px 0;border-bottom:1px solid var(--bd)}
-.panelmap .section:last-child{border-bottom:0;padding-bottom:0}
-.panelmap .section b{display:block;color:var(--ink3);font-size:11px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:5px}
-.panelmap .section span{color:var(--ink);font-size:13px}
-.panelmap-note{font-size:12px;color:var(--ink3);margin:10px auto 0;max-width:460px}
+.panelshot{max-width:460px;margin:auto}
 
 .flow{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:32px}
 .step{background:var(--sf);border:1px solid var(--bd);border-radius:6px;padding:20px}
@@ -233,15 +227,7 @@ footer{margin-top:88px;padding:36px 0 56px;border-top:1px solid var(--bd);color:
         </ul>
       </div>
       <div>
-        <div class="panelmap" aria-label="Bar panel sections in display order">
-          <div class="title">Agent Pulse</div>
-          <div class="section"><b>Source focus</b><span>All sources or one provider</span></div>
-          <div class="section"><b>Pinned limits</b><span>Up to three limits and their reset times</span></div>
-          <div class="section"><b>Limits to watch</b><span>Three suggestions with reset times</span></div>
-          <div class="section"><b>Latest six hours</b><span>Recorded tokens in local time</span></div>
-          <div class="section"><b>Tokens by model</b><span>Four top models across all routes</span></div>
-        </div>
-        <p class="panelmap-note">Section map. The panel image will be updated after desktop review.</p>
+        <div class="shot panelshot"><img src="media/panel.png" alt="Bar panel with source picker, pinned limits, limits to watch, latest six hours, and top models in generated demo data"></div>
       </div>
     </div>
   </section>
