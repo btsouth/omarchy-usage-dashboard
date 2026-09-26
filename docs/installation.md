@@ -6,7 +6,7 @@ The quickest install downloads the current archive and runs the same installer:
 curl -fsSL https://raw.githubusercontent.com/btsouth/omarchy-usage-dashboard/main/install.sh | bash -s -- --with-plugin
 ```
 
-Set `OMARCHY_USAGE_REF=v1.7.0` on the Bash side of the pipe to pin a release, and `OMARCHY_USAGE_TARBALL=/path/file.tar.gz` installs a local archive. From a checkout, run `python3 install.py --with-plugin` directly; both paths produce the same installation.
+Set `OMARCHY_USAGE_REF=v1.8.0` on the Bash side of the pipe to pin a release, and `OMARCHY_USAGE_TARBALL=/path/file.tar.gz` installs a local archive. From a checkout, run `python3 install.py --with-plugin` directly; both paths produce the same installation.
 
 The installer runs without sudo. It checks all tracked destinations before changing files, records original files and pending replacements, and writes each replacement atomically. If an install or upgrade is interrupted, rerun it to finish or use `--uninstall` to restore managed originals. This is per-file recovery, not an atomic transaction across all files. It does not modify `/usr/share/omarchy`.
 
@@ -28,7 +28,7 @@ The installer runs without sudo. It checks all tracked destinations before chang
 
 XDG config, data, and state paths are respected. The launchers remain under `~/.local/bin`, which should be on PATH. Set custom source-home variables such as CODEX_HOME consistently for your shell and systemd user manager if you use them.
 
-`--with-plugin` installs the AI Usage Dashboard widget alongside the built-in Agents widget. To use it as your only AI widget, remove Agents from your bar layout and keep AI Usage Dashboard. This hides the old widget without changing its packaged files. The application menu entry and the widget's Open analytics button open the same dashboard. On uninstall, the widget entry added by this installer is removed by its id, including any settings added to that entry. An entry that existed before installation is preserved. Other shell configuration is preserved.
+`--with-plugin` installs the Agent Pulse widget alongside the built-in Agents widget. To use it as your only AI widget, remove Agents from your bar layout and keep Agent Pulse. This hides the old widget without changing its packaged files. The application menu entry and the widget's Open analytics button open the same dashboard. On uninstall, the widget entry added by this installer is removed by its id, including any settings added to that entry. An entry that existed before installation is preserved. Other shell configuration is preserved.
 
 `--no-systemd` writes files without enabling, stopping, or reloading services. It is intended for staged installs and automated tests. Enable the installed timer manually when staging is complete.
 

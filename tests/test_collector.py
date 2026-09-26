@@ -1,5 +1,7 @@
 import datetime as dt
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -32,10 +34,13 @@ class CollectorTests(unittest.TestCase):
         # test that reaches the real home would overwrite the user's settings.
         self.conf = patch.object(c, 'CONFIG', self.root / 'config/omarchy/ai-usage/settings.json')
         self.conf.start(); self.addCleanup(self.conf.stop)
+        self.pin_conf = patch.object(c, 'PINNED_LIMIT', self.root / 'config/omarchy/ai-usage/pinned-limit.json')
+        self.pin_conf.start(); self.addCleanup(self.pin_conf.stop)
         self.state = patch.object(c, 'STATE', self.root / 'state')
         self.state.start(); self.addCleanup(self.state.stop)
         # Fail loudly rather than overwrite a real preference file.
         self.assertTrue(str(c.CONFIG).startswith(str(self.root)))
+        self.assertTrue(str(c.PINNED_LIMIT).startswith(str(self.root)))
         self.assertTrue(str(c.STATE).startswith(str(self.root)))
 
     def tearDown(self):
@@ -63,6 +68,81 @@ class CollectorTests(unittest.TestCase):
             'last_token_usage': {'input_tokens': 100, 'cached_input_tokens': 70,
                                 'output_tokens': 20, 'reasoning_output_tokens': 10},
             'total_token_usage': {'input_tokens': total, 'output_tokens': 20}}}}
+
+    def run_pulse(self):
+        output = io.StringIO()
+        with patch.object(sys, 'argv', ['collector.py', 'pulse']), contextlib.redirect_stdout(output), \
+             patch.object(c, 'cursor_usage', side_effect=AssertionError('Pulse fetched Cursor usage')), \
+             patch.object(c, 'go_quota', side_effect=AssertionError('Pulse fetched a quota')), \
+             patch.object(c.Ledger, 'sync_ledgers', side_effect=AssertionError('Pulse synced the ledger')):
+            c.main()
+        return json.loads(output.getvalue())
+
+    def test_pinned_limits_migrate_and_enforce_three_without_touching_ledger(self):
+        c.CONFIG.parent.mkdir(parents=True)
+        c.CONFIG.write_text('{"keep":"settings"}')
+        legacy = {'provider': 'codex', 'label': 'Weekly (7-day)', 'title': 'Weekly'}
+        c.PINNED_LIMIT.write_text(json.dumps(legacy))
+        self.assertEqual(c.pinned_limits(), [legacy])
+        self.assertEqual(c.save_pinned_limit('claude', 'Weekly (7-day)', 'Weekly'),
+                         [legacy, {'provider': 'claude', 'label': 'Weekly (7-day)', 'title': 'Weekly'}])
+        c.save_pinned_limit('codex-second', 'Weekly (7-day)', 'Weekly')
+        self.assertEqual(len(c.pinned_limits()), 3)
+        self.assertEqual(len(c.save_pinned_limit('codex', 'Weekly (7-day)', 'Weekly')), 3)
+        with self.assertRaisesRegex(ValueError, 'three limits'):
+            c.save_pinned_limit('grok', 'Weekly', 'Weekly')
+        self.assertEqual(c.pinned_limits()[0], legacy)
+        self.assertEqual(c.save_pinned_limit('claude', 'Weekly (7-day)', 'Weekly', remove=True),
+                         [legacy, {'provider': 'codex-second', 'label': 'Weekly (7-day)', 'title': 'Weekly'}])
+        self.assertEqual(json.loads(c.CONFIG.read_text()), {'keep': 'settings'})
+        self.assertFalse((c.STATE / 'usage.sqlite').exists())
+        self.assertEqual(c.save_pinned_limit('', ''), [])
+        self.assertEqual(c.pinned_limits(), [])
+        with self.assertRaises(ValueError): c.save_pinned_limit('../codex', 'Weekly (7-day)')
+        # The panel and dashboard loaders drop these ids, so a saved pin would
+        # hold a slot nobody can see or unpin.
+        for provider in ('Codex-Work', '-codex', 'a' * 81):
+            with self.assertRaises(ValueError): c.save_pinned_limit(provider, 'Weekly (7-day)')
+        self.assertEqual(c.pinned_limits(), [])
+
+    def test_pulse_counts_new_codex_usage_without_network_or_duplicate_rows(self):
+        now = dt.datetime.now(dt.timezone.utc).isoformat()
+        path = self.transcript('codex/sessions/2026/09/pulse.jsonl', [
+            {'type': 'session_meta', 'payload': {'id': 'pulse-session', 'timestamp': now}},
+            self.codex_event(now, total=100)])
+        first = self.run_pulse()
+        self.assertEqual(first['tokens'], 120)
+        self.assertEqual(self.run_pulse()['tokens'], 120)
+        with path.open('a') as stream:
+            stream.write(json.dumps(self.codex_event(now, total=200)) + '\n')
+        second = self.run_pulse()
+        self.assertEqual(second['tokens'], 240)
+        self.assertEqual(json.loads((c.STATE / 'hourly-summary.json').read_text())['tokens'], 240)
+        ledger = c.Ledger(c.STATE / 'usage.sqlite', readonly=True)
+        self.assertEqual(ledger.db.execute('SELECT COUNT(*) FROM events').fetchone()[0], 2)
+        self.assertIsNone(ledger.db.execute("SELECT value FROM metadata WHERE key='scan'").fetchone())
+        ledger.db.close()
+
+    def test_pulse_reads_opencode_wal_changes(self):
+        path = self.root / 'data/opencode/opencode.db'
+        path.parent.mkdir(parents=True)
+        db = sqlite3.connect(path)
+        self.addCleanup(db.close)
+        db.execute('PRAGMA journal_mode=WAL')
+        db.execute('CREATE TABLE session (id TEXT, directory TEXT)')
+        db.execute('CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT)')
+        db.execute('INSERT INTO session VALUES (?,?)', ('session', '/project'))
+        ts = int(time.time() * 1000)
+        usage = {'role': 'assistant', 'modelID': 'test-model', 'providerID': 'opencode',
+                 'tokens': {'input': 100, 'output': 20}}
+        db.execute('INSERT INTO message VALUES (?,?,?,?)', ('message', 'session', ts, json.dumps(usage)))
+        db.commit()
+        self.assertEqual(self.run_pulse()['tokens'], 120)
+        self.assertEqual(self.run_pulse()['tokens'], 120)
+        usage['tokens']['output'] = 50
+        db.execute('UPDATE message SET data=? WHERE id=?', (json.dumps(usage), 'message'))
+        db.commit()
+        self.assertEqual(self.run_pulse()['tokens'], 150)
 
     def test_codex_repeated_snapshot_cache_and_reasoning(self):
         event = self.codex_event()
@@ -1089,6 +1169,59 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(r['previous']['tokens'], 50)
         self.assertTrue(r['hourly'][-1]['title'].endswith('to now'))
         ledger.db.close()
+
+    def test_hour_drill_keeps_session_summaries_unplaced_and_previous_day_comparable(self):
+        ledger = c.Ledger(self.root / 'hours.sqlite')
+        now = dt.datetime(2026, 9, 5, 12).astimezone()
+        for key, when, tokens, client in [
+                ('today', '2026-09-05T10:15:00', 120, 'CLI'),
+                ('later', '2026-09-05T11:15:00', 30, 'CLI'),
+                ('session', '2026-09-05T10:20:00', 400, 'Hermes'),
+                ('prior', '2026-09-04T10:15:00', 70, 'CLI')]:
+            item = c.record(key, 'codex', key, when, 'm', '', client, input=tokens)
+            if client == 'Hermes': item['timePrecision'] = 'session'
+            ledger.put(item)
+        with patch.object(c, 'load_rates', return_value={'document': {}, 'source': 'test'}):
+            day = c.report(ledger, c.DEFAULTS, 7, now=now, selection={'day': '2026-09-05'})
+            hour = c.report(ledger, c.DEFAULTS, 7, now=now,
+                            selection={'day': '2026-09-05', 'hourStart': int(dt.datetime(2026, 9, 5, 10).timestamp())})
+        self.assertEqual(day['summary']['tokens'], 550)
+        self.assertEqual(day['previous']['tokens'], 70)
+        self.assertEqual(day['hourlyUnplaced']['total']['tokens'], 400)
+        self.assertEqual(sum(h['total']['tokens'] for h in day['hourly']), 150)
+        self.assertEqual(hour['summary']['tokens'], 120)
+        self.assertEqual(hour['hourly'][0]['total']['tokens'], 120)
+        self.assertEqual([row['name'] for row in hour['sessions']], ['today'])
+        snapshot = c.hourly_snapshot(ledger, now)
+        self.assertEqual((snapshot['tokens'], snapshot['timedTokens'], snapshot['unplacedTokens']), (550, 150, 400))
+        self.assertEqual(sum(h['tokens'] for h in snapshot['hours']), 150)
+        ledger.db.close()
+
+    def test_hour_labels_distinguish_daylight_saving_repeated_hour(self):
+        if not hasattr(time, 'tzset'): self.skipTest('tzset unavailable')
+        ledger = c.Ledger(self.root / 'dst.sqlite')
+        old = os.environ.get('TZ')
+        try:
+            os.environ['TZ'] = 'America/New_York'; time.tzset()
+            now = dt.datetime.fromisoformat('2026-11-01T02:30:00-05:00')
+            for key, when in [('first', '2026-11-01T01:15:00-04:00'),
+                              ('second', '2026-11-01T01:15:00-05:00')]:
+                ledger.put(c.record(key, 'codex', key, when, 'm', '', 'CLI', input=100))
+            with patch.object(c, 'load_rates', return_value={'document': {}, 'source': 'test'}):
+                result = c.report(ledger, c.DEFAULTS, 1, now=now)
+            repeated = [h for h in result['hourly'] if h['label'] == '01:00']
+            self.assertEqual(len(repeated), 2)
+            self.assertNotEqual(repeated[0]['title'], repeated[1]['title'])
+            self.assertEqual([h['total']['tokens'] for h in repeated], [100, 100])
+            self.assertEqual(sum(h['total']['tokens'] for h in result['hourly']), result['summary']['tokens'])
+            snapshot = c.hourly_snapshot(ledger, now)
+            repeated_panel = [h for h in snapshot['hours'] if h['label'] == '01:00']
+            self.assertEqual([h['zone'] for h in repeated_panel], ['EDT', 'EST'])
+        finally:
+            if old is None: os.environ.pop('TZ', None)
+            else: os.environ['TZ'] = old
+            time.tzset()
+            ledger.db.close()
 
     def test_drilldown_reconciles_sessions_and_partial_pricing(self):
         ledger = c.Ledger(self.root / 'detail.sqlite')

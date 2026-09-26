@@ -14,6 +14,24 @@ Item {
 
   readonly property string home: Quickshell.env("HOME") || ""
   readonly property string usageDir: (Quickshell.env("XDG_STATE_HOME") || home + "/.local/state") + "/omarchy/agents/usage"
+  readonly property string hourlyPath: (Quickshell.env("XDG_STATE_HOME") || home + "/.local/state") + "/omarchy/ai-usage/hourly-summary.json"
+  property var hourlySummary: null
+
+  FileView {
+    id: hourlyFile
+    path: root.hourlyPath
+    watchChanges: true
+    atomicWrites: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: {
+      try {
+        var value = JSON.parse(text())
+        root.hourlySummary = value && value.schemaVersion === 1 ? value : null
+      } catch (e) { root.hourlySummary = null }
+    }
+    onLoadFailed: root.hourlySummary = null
+  }
 
   // ------------------------------------------------------------- discovery
 
@@ -167,6 +185,7 @@ Item {
     id: updateProcess
     running: false
     onExited: {
+      hourlyFile.reload()
       root.rescanAgents()
       if (root.pendingUpdateKind !== "") {
         var kind = root.pendingUpdateKind
@@ -179,6 +198,21 @@ Item {
       waitForEnd: true
       onStreamFinished: if (text.trim() !== "") console.warn("agents", text.trim())
     }
+  }
+
+  Process {
+    id: pulseProcess
+    running: false
+    command: ["python3", (Quickshell.env("AI_USAGE_ROOT") || root.home + "/.local/share/omarchy-usage-dashboard/app") + "/collector.py", "pulse"]
+    onExited: hourlyFile.reload()
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (text.trim() !== "") console.warn("agent pulse", text.trim())
+    }
+  }
+
+  function refreshPulse() {
+    if (!pulseProcess.running && !updateProcess.running) pulseProcess.running = true
   }
 
   // The installed wrapper refreshes native quotas and the local analytics ledger.

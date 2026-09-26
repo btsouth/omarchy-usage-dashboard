@@ -17,8 +17,44 @@ Scope {
     readonly property color surface: Qt.alpha(palette.lighter_background || "#23372b", 0.28)
     readonly property string fontFamily: themeData && themeData.font ? themeData.font : (data && data.theme ? data.theme.font : "monospace")
     readonly property string helper: (Quickshell.env("AI_USAGE_ROOT") || decodeURIComponent(Qt.resolvedUrl("..").toString().replace(/^file:\/\//, ""))) + "/collector.py"
+    property string clockPattern: Qt.locale().timeFormat(Locale.ShortFormat)
+    readonly property bool clockUses24Hour: !/[Aa]/.test(clockPattern.replace(/'[^']*'/g, ""))
+    readonly property string shortTimePattern: clockUses24Hour ? "HH:mm" : "h:mm AP"
+    function loadClockPattern(raw) {
+        try {
+            var config = JSON.parse(raw)
+            var bar = config.bar || {}, layout = bar.layout || {}
+            var vertical = bar.position === "left" || bar.position === "right"
+            for (var side of ["left", "center", "right"]) {
+                var entries = layout[side] || []
+                for (var i = 0; i < entries.length; i++) {
+                    if (!entries[i] || entries[i].id !== "omarchy.clock") continue
+                    clockPattern = String(vertical ? (entries[i].verticalFormat || "HH\nmm")
+                                                   : (entries[i].format || "dddd HH:mm"))
+                    return
+                }
+            }
+        } catch (e) {}
+        clockPattern = Qt.locale().timeFormat(Locale.ShortFormat)
+    }
+    function localClock(start) { return Qt.formatDateTime(new Date(Number(start) * 1000), shortTimePattern) }
+    function hourTitle(hour) {
+        var parts = String(hour.title || "").split(" to ")
+        if (parts.length !== 2) return localClock(hour.start)
+        var start = Number(hour.start)
+        return parts[0].replace(/^\d{2}:\d{2}/, localClock(start)) + " to "
+            + (parts[1] === "now" ? "now" : parts[1].replace(/^\d{2}:\d{2}/, localClock(start + 3600)))
+    }
     property var data: null
-    property int days: 7
+    property var pulseSummary: null
+    property string pulseSignature: ""
+    property bool pulseFailed: false
+    property double nowMs: Date.now()
+    readonly property string pinPath: (Quickshell.env("XDG_CONFIG_HOME") || Quickshell.env("HOME")+"/.config")+"/omarchy/ai-usage/pinned-limit.json"
+    property var pinnedLimits: []
+    property var pinnedUsages: ({})
+    property bool pinSaveFailed: false
+    property int days: 1
     property string provider: "all"
     property string metric: "tokens"
     property var selection: ({})
@@ -30,12 +66,24 @@ Scope {
         tableLimit = 20; refresh()
     }
     property int tableLimit: 20
+    property bool filtersOpen: false
+    property bool providerDetailsOpen: false
+    property bool providerRowsExpanded: false
+    property bool coverageOpen: false
+    function choosePeriod(count) {
+        days = count; navigation = []
+        var keep = Object.assign({}, selection)
+        delete keep.day; delete keep.hourStart
+        selection = keep
+        refresh()
+    }
     function filterBy(field, name, providerId) {
         // Narrowing the page leaves the reader where they are; an empty name
         // clears that field, which is what the All chips do.
         navigation = navigation.concat([{selection:selection,provider:provider,breakdown:breakdown}])
         var next = Object.assign({}, selection)
         if (name === "") delete next[field]; else next[field] = name
+        if (field === "day") delete next.hourStart
         selection = next
         if (providerId) provider = providerId
         tableLimit = 20; refresh()
@@ -44,6 +92,14 @@ Scope {
         // Opening a row also narrows the page, then shows the sessions behind it.
         filterBy(field, name, providerId)
         breakdown = "sessions"
+    }
+    function drillHour(start) {
+        if (!data || Number(selection.hourStart) === Number(start) || !data.hourly.some(h => Number(h.start) === Number(start))) return
+        navigation = navigation.concat([{selection:selection,provider:provider,breakdown:breakdown}])
+        selection = Object.assign({}, selection, {day: Qt.formatDate(new Date(start*1000), "yyyy-MM-dd"), hourStart: Number(start)})
+        breakdown = "sessions"
+        tableLimit = 20
+        refresh()
     }
     function modelChips(options, selectedName) {
         // The row stays switchable while a filter is on: the selected model keeps
@@ -56,6 +112,16 @@ Scope {
         return top
     }
     function clearSelection() { navigation = []; selection = ({}); tableLimit = 20; refresh() }
+    function chooseSource(id) {
+        var next = Object.assign({}, selection)
+        var excluded = (next.excludeSource || []).filter(source => source !== id)
+        if (id === "all" || !excluded.length) delete next.excludeSource
+        else next.excludeSource = excluded
+        selection = next
+        provider = id
+        tableLimit = 20
+        refresh()
+    }
     function isExcluded(id) { return (selection.excludeSource || []).indexOf(id) >= 0 }
     function toggleSource(id) {
         // A source switched off leaves the whole view without leaving the
@@ -73,14 +139,16 @@ Scope {
     }
     function filterText() {
         return Object.keys(selection).map(function(k) {
-            if (k === "account") return k+": "+(root.data.accountOptions.find(a=>a.id===root.selection[k]) || {}).label || root.selection[k]
+            if (k === "account") return "account: "+((root.data.accountOptions.find(a=>a.id===root.selection[k]) || {}).label || root.selection[k])
             if (k === "excludeSource") return "excluded: "+root.selection[k].map(id=>root.providerName(id)).join(", ")
+            if (k === "hourStart") return "hour: "+root.localClock(root.selection[k])
             return k+": "+root.selection[k]
         }).join(" · ")
     }
-    function when(ts) { return ts ? Qt.formatDateTime(new Date(ts*1000), "MMM d, yyyy HH:mm") : "No recorded activity" }
+    function when(ts) { return ts ? Qt.formatDateTime(new Date(ts*1000), "MMM d, yyyy " + shortTimePattern) : "No recorded activity" }
     property string breakdown: "models"
     property bool settingsOpen: false
+    property string settingsTab: "sources"
     property string error: ""
     property bool pending: false
     property var themeData: null
@@ -147,11 +215,82 @@ Scope {
         n = Number(n || 0)
         return n >= 1e9 ? (n/1e9).toFixed(2)+"B" : n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1e3 ? (n/1e3).toFixed(1)+"K" : String(Math.round(n))
     }
+    function liveTodayView() {
+        return !!pulseSummary && !!data && days === 1 && Object.keys(selection).length === 0
+            && pulseSummary.date === Qt.formatDate(new Date(nowMs), "yyyy-MM-dd")
+            && Number(pulseSummary.utcOffsetMinutes) === -new Date(nowMs).getTimezoneOffset()
+    }
+    function pulseTokens() {
+        if (!liveTodayView()) return 0
+        if (provider !== "all") return Number((pulseSummary.providers[provider] || {}).tokens || 0)
+        return data.settings.enabled.reduce((sum, id) => sum + Number((pulseSummary.providers[id] || {}).tokens || 0), 0)
+    }
+    function pinnedName(pin) {
+        if (!pin) return ""
+        if (pin.provider === "codex") return "ChatGPT Main"
+        if (pin.provider === "codex-second") return "ChatGPT Second"
+        var usage = pinnedUsages[pin.provider]
+        return usage && usage.name ? usage.name : pin.provider
+    }
+    function pinnedWindow(pin) {
+        var usage = pin ? pinnedUsages[pin.provider] : null
+        if (!pin || !usage || usage.id !== pin.provider) return null
+        var matches = (usage.limits || []).filter(w => w.label === pin.label)
+        if (matches.length === 1) return matches[0]
+        return matches.find(w => String(w.title || "") === pin.title) || null
+    }
+    function pinnedResetText(value) {
+        if (!value) return "Reset time not reported"
+        var parsed = new Date(String(value).replace(/(\.\d{3})\d+/, "$1"))
+        if (!isFinite(parsed.getTime())) return "Reset time unavailable"
+        var relative = resetText(value)
+        return (relative || "Awaiting reset update") + " · " + Qt.formatDateTime(parsed, "ddd " + shortTimePattern)
+    }
+    function unpinLimit(pin) {
+        if (!pinSave.running) {
+            pinSaveFailed = false
+            pinSave.command = ["python3", helper, "pin", "--pin-provider", pin.provider,
+                "--pin-label", pin.label, "--pin-title", pin.title, "--pin-remove"]
+            pinSave.running = true
+        }
+    }
+    function setPinnedUsage(id, usage) {
+        var next = Object.assign({}, pinnedUsages)
+        next[id] = usage
+        pinnedUsages = next
+    }
+    function pulseStatus() {
+        if (Quickshell.env("AI_USAGE_DEMO") === "1") return "Demo data · local updates disabled"
+        if (pulseFailed) return "Local update unavailable"
+        if (!pulseSummary) return "Checking local history"
+        var age = Math.max(0, Math.floor((nowMs - Number(pulseSummary.generatedAt || 0) * 1000) / 1000))
+        return age < 30 ? "Live local history · checked just now" : age < 60
+            ? "Local history checked under 1m ago" : "Local history checked " + Math.floor(age / 60) + "m ago"
+    }
+    function acceptPulse(value) {
+        if (!value || value.schemaVersion !== 1) return
+        var signature = JSON.stringify([value.date, value.utcOffsetMinutes, value.providers, value.hours, value.unplacedTokens])
+        var changed = pulseSignature !== "" && pulseSignature !== signature
+        pulseSignature = signature
+        pulseSummary = value
+        pulseFailed = false
+        nowMs = Date.now()
+        if (changed && !live.running && !settingsOpen) refresh()
+    }
     function money(n) { return "$" + Number(n || 0).toLocaleString(Qt.locale("en_US"), 'f', 2) }
     function shortDate(value) { return value ? Qt.formatDate(new Date(value+"T12:00:00"),"MMM d") : "" }
     function display(b) { return metric === "tokens" ? compact(b ? b.tokens : 0) : b && b.tokens > 0 && b.unpricedTokens === b.tokens ? "Unpriced" : money(b ? b.value : 0) }
     function amount(b) { return b ? (metric === "tokens" ? b.tokens : b.value) : 0 }
     function valueText(b) { return b.unpricedTokens === b.tokens && b.tokens > 0 ? "Unpriced" : money(b.value) + (b.unpricedTokens ? " + unpriced" : "") }
+    function comparisonText() {
+        if (!data || selection.hourStart) return ""
+        var current = Number(data.summary.tokens || 0), previous = Number(data.previous.tokens || 0)
+        var span = selection.day ? "previous day" : days === 1 ? "yesterday so far" : "previous period"
+        if (previous <= 0) return "No " + span + " baseline"
+        var ratio = current / previous
+        if (ratio >= 10) return "↑ " + Math.round(ratio) + "× vs " + span
+        return (current >= previous ? "↑ " : "↓ ") + Math.abs((ratio - 1) * 100).toFixed(1) + "% vs " + span
+    }
     function routeCount(row) {
         // A Models row can stand for several routes. Say so, rather than letting
         // one row read as one route's traffic.
@@ -187,6 +326,10 @@ Scope {
     function refreshLive() {
         if (!live.running) live.running = true
         root.refresh()
+    }
+    function refreshPulse() {
+        if (Quickshell.env("AI_USAGE_DEMO") !== "1" && window.visible && !settingsOpen && !live.running && !pulse.running)
+            pulse.running = true
     }
     function refreshTheme() {
         if (themeScan.running) { themePending = true; return }
@@ -281,7 +424,22 @@ Scope {
     Process {
         id: live
         command: Quickshell.env("AI_USAGE_DEMO") === "1" ? ["python3", helper, "report"] : ["bash", helper.replace(/collector\.py$/, "refresh.sh"), "--force"]
-        onExited: root.refresh()
+        onExited: { pulseFile.reload(); root.refresh(); root.refreshPulse() }
+    }
+    Process {
+        id: pulse
+        command: ["python3", helper, "pulse"]
+        stdout: StdioCollector { onStreamFinished: {
+            try { root.acceptPulse(JSON.parse(text)) } catch(e) { root.pulseFailed = true }
+        } }
+        onExited: function(code) { pulseFile.reload(); if (code !== 0) root.pulseFailed = true }
+    }
+    Process {
+        id: pinSave
+        onExited: function(code) {
+            pinSaveFailed = code !== 0
+            pinFile.reload()
+        }
     }
     Process {
         id: themeScan
@@ -294,6 +452,51 @@ Scope {
         }
     }
     Timer { interval: 300000; repeat: true; running: window.visible; onTriggered: root.refresh() }
+    Timer { interval: 15000; repeat: true; running: window.visible && !root.settingsOpen; onTriggered: root.refreshPulse() }
+    Timer { interval: 5000; repeat: true; running: window.visible; onTriggered: root.nowMs = Date.now() }
+    Timer { interval: 5000; repeat: true; running: window.visible; onTriggered: pinFile.reload() }
+    FileView {
+        id: pinFile
+        path: root.pinPath
+        watchChanges: true; atomicWrites: true; printErrors: false
+        onFileChanged: reload()
+        onLoaded: {
+            try {
+                var value = JSON.parse(text())
+                var entries = value && Array.isArray(value.pins) ? value.pins : [value]
+                var next = entries.filter(pin => pin && typeof pin.provider === "string"
+                    && /^[a-z0-9][a-z0-9-]{0,79}$/.test(pin.provider)
+                    && typeof pin.label === "string" && pin.label.length > 0
+                    && (pin.title === undefined || typeof pin.title === "string"))
+                    .map(pin => ({provider:pin.provider,label:pin.label,title:pin.title || ""})).slice(0, 3)
+                if (JSON.stringify(root.pinnedLimits) !== JSON.stringify(next)) root.pinnedLimits = next
+            } catch(e) { root.pinnedLimits = [] }
+        }
+        onLoadFailed: root.pinnedLimits = []
+    }
+    Instantiator {
+        model: root.pinnedLimits
+        delegate: FileView {
+            required property var modelData
+            path: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME")+"/.local/state")
+                + "/omarchy/agents/usage/" + modelData.provider + ".json"
+            watchChanges: true; atomicWrites: true; printErrors: false
+            onPathChanged: if (path) reload()
+            onFileChanged: reload()
+            onLoaded: {
+                try { root.setPinnedUsage(modelData.provider, JSON.parse(text())) }
+                catch(e) { root.setPinnedUsage(modelData.provider, null) }
+            }
+            onLoadFailed: root.setPinnedUsage(modelData.provider, null)
+        }
+    }
+    FileView {
+        id: pulseFile
+        path: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME")+"/.local/state")+"/omarchy/ai-usage/hourly-summary.json"
+        watchChanges: true; atomicWrites: true; printErrors: false
+        onFileChanged: reload()
+        onLoaded: { try { root.acceptPulse(JSON.parse(text())) } catch(e) {} }
+    }
     FileView {
         // current/ is stable while omarchy theme set replaces current/theme by
         // rename, so this watcher keeps firing after each swap. The file
@@ -313,6 +516,13 @@ Scope {
         watchChanges: true; printErrors: false
         onFileChanged: root.refresh()
     }
+    FileView {
+        path: (Quickshell.env("XDG_CONFIG_HOME") || Quickshell.env("HOME")+"/.config")+"/omarchy/shell.json"
+        watchChanges: true; atomicWrites: true; printErrors: false
+        onFileChanged: reload()
+        onLoaded: root.loadClockPattern(text())
+        onLoadFailed: root.loadClockPattern("")
+    }
     IpcHandler {
         target: "analytics"
         function quit(): void { Qt.quit() }
@@ -331,7 +541,13 @@ Scope {
         function metric(name: string): void { root.metric = name }
         function preferences(): void { root.openSettings() }
         function overview(): void { root.settingsOpen = false }
-        function period(days: int): void { root.days = days; root.refresh() }
+        function period(days: int): void { root.choosePeriod(days) }
+        function firstHour(): void {
+            if (!root.data) return
+            var hour = root.data.hourly.find(h => h.total.tokens > 0)
+            if (hour) root.drillHour(hour.start)
+        }
+        function filters(): void { root.filtersOpen = true }
         function scrollTo(y: int): void { scroll.contentItem.contentY = y }
         function tooltip(): void { chart.hovered=2; chart.pointerX=chart.width/2; chartTip.open() }
         function clearTooltip(): void { chart.hovered=-1 }
@@ -430,7 +646,7 @@ Scope {
     }
     FloatingWindow {
         id: window
-        title: "AI Usage"
+        title: "Agent Pulse"
         color: "transparent"
         implicitWidth: 1200
         implicitHeight: 900
@@ -460,11 +676,11 @@ Scope {
                 Column {
                     Layout.fillWidth: true; Layout.minimumWidth: 150
                     spacing: 3
-                    Label { text: root.settingsOpen ? "Preferences" : "AI usage"; font.pixelSize: 21; font.weight: Font.Medium }
-                    Sub { width: parent.width; elide: Text.ElideRight; text: Quickshell.env("AI_USAGE_DEMO") === "1" ? "Demo data · no local history" : (root.data ? root.data.settings.enabled.map(p => root.providerName(p)).join(" · ") : "Local AI usage") }
+                    Label { text: root.settingsOpen ? "Preferences" : "Agent Pulse"; font.pixelSize: 21; font.weight: Font.Medium }
+                    Sub { width: parent.width; elide: Text.ElideRight; text: Quickshell.env("AI_USAGE_DEMO") === "1" ? "Demo data · no local history" : (root.data ? root.data.settings.enabled.map(p => root.providerName(p)).join(" · ") : "Local agent history") }
                 }
                 Item { Layout.fillWidth: true }
-                Sub { text: scan.running || live.running ? "Updating usage…" : root.data ? root.data.period.start + "  to  " + root.data.period.end : "Loading…" }
+                Sub { text: scan.running || live.running ? "Updating usage…" : root.liveTodayView() && !root.pulseFailed && Quickshell.env("AI_USAGE_DEMO") !== "1" ? "Today · local history live" : root.data ? (root.days === 1 ? "Today" : root.data.period.start + "  to  " + root.data.period.end) + " · scanned " + root.when(root.data.coverage.scannedAt) : "Loading…" }
                 Choice { text: root.settingsOpen ? "Cancel" : "Settings"; onClicked: root.settingsOpen ? root.settingsOpen = false : root.openSettings() }
                 Choice { visible: root.settingsOpen; text: "Save preferences"; selected: true; enabled: !save.running; onClicked: root.saveSettings() }
                 Choice { visible: !root.settingsOpen; text: "Refresh"; enabled: !scan.running && !live.running; onClicked: root.refreshLive() }
@@ -475,41 +691,94 @@ Scope {
             RowLayout {
                 visible: !root.settingsOpen
                 Layout.fillWidth: true
-                spacing: 6
-                Flow {
-                    Layout.fillWidth: true; spacing: 6
-                    Repeater {
-                        model: [{id: "all", name: "Overview"}].concat(root.data ? root.data.settings.enabled.map(p => ({id:p,name:root.providerName(p)})) : [])
-                        Choice {
-                            required property var modelData
+                spacing: 10
+                ComboBox {
+                    id: sourcePicker
+                    Layout.preferredWidth: 190
+                    model: [{id:"all",name:"All sources"}].concat(root.data ? root.data.settings.enabled.map(p => ({id:p,name:root.providerName(p)})) : [])
+                    textRole: "name"; valueRole: "id"
+                    currentIndex: model.findIndex(p => p.id === root.provider)
+                    onModelChanged: currentIndex = model.findIndex(p => p.id === root.provider)
+                    font.family: root.fontFamily; font.pixelSize: 12; implicitHeight: 34
+                    Accessible.name: "Source focus"
+                    onActivated: root.chooseSource(currentValue)
+                    background: Rectangle {
+                        radius: 3
+                        color: sourcePicker.down ? Qt.alpha(root.ink,0.18) : sourcePicker.hovered ? Qt.alpha(root.ink,0.08) : root.surface
+                        border.color: sourcePicker.activeFocus ? root.accent : root.edge
+                    }
+                    contentItem: Label {
+                        leftPadding: 14; rightPadding: 32
+                        text: sourcePicker.displayText
+                        color: root.ink
+                        font.pixelSize: 12
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
+                    }
+                    indicator: Label {
+                        x: sourcePicker.width - width - 12
+                        y: (sourcePicker.height-height)/2
+                        text: "⌄"
+                        color: root.muted
+                        font.pixelSize: 16
+                    }
+                    delegate: ItemDelegate {
+                        required property var modelData
+                        required property int index
+                        width: sourcePicker.width - 8; height: 34
+                        highlighted: sourcePicker.highlightedIndex === index
+                        contentItem: Label {
                             text: modelData.name
-                            // Overview means every source. The rest switch one source
-                            // out of the view and back, which changes what is shown
-                            // without changing what this machine collects.
-                            selected: modelData.id === "all" ? root.provider === "all" && !(root.selection.excludeSource || []).length : root.provider === modelData.id
-                            excluded: modelData.id !== "all" && root.isExcluded(modelData.id)
-                            onClicked: {
-                                if (modelData.id === "all") { root.provider = "all"; if ((root.selection.excludeSource || []).length) root.filterBy("excludeSource", "") ; else root.refresh() }
-                                else root.toggleSource(modelData.id)
-                            }
+                            color: parent.highlighted ? root.bright : root.ink
+                            font.pixelSize: 12
+                            verticalAlignment: Text.AlignVCenter
+                            leftPadding: 10
+                            elide: Text.ElideRight
+                        }
+                        background: Rectangle { radius: 3; color: parent.highlighted ? Qt.alpha(root.ink,0.12) : "transparent" }
+                    }
+                    popup: Popup {
+                        y: sourcePicker.height + 4
+                        width: sourcePicker.width
+                        implicitHeight: Math.min(contentItem.implicitHeight + 8, 8 * 34 + 8)
+                        padding: 4
+                        background: Rectangle { color: root.base; border.color: root.edge; radius: 3 }
+                        contentItem: ListView {
+                            clip: true
+                            implicitHeight: contentHeight
+                            model: sourcePicker.popup.visible ? sourcePicker.delegateModel : null
+                            currentIndex: sourcePicker.highlightedIndex
+                            ScrollIndicator.vertical: ScrollIndicator {}
                         }
                     }
+                    Connections {
+                        target: root
+                        function onProviderChanged() { sourcePicker.currentIndex = sourcePicker.model.findIndex(p => p.id === root.provider) }
+                    }
                 }
+                Choice { text: root.filtersOpen ? "Hide filters" : "Filters" + (Object.keys(root.selection).length ? " · active" : ""); onClicked: root.filtersOpen = !root.filtersOpen }
+                Item { Layout.fillWidth: true }
                 Repeater {
                     model: [1,7,30,90,365]
-                    Choice { required property int modelData; text: modelData === 1 ? "Today" : modelData === 365 ? "Year" : modelData + "d"; selected: root.days === modelData; onClicked: { root.days = modelData; root.navigation = []; var keep = Object.assign({}, root.selection); delete keep.day; root.selection = keep; root.refresh() } }
+                    Choice { required property int modelData; text: modelData === 1 ? "Today" : modelData === 365 ? "Year" : modelData + "d"; selected: root.days === modelData; onClicked: root.choosePeriod(modelData) }
                 }
             }
-            Flow { Layout.fillWidth: true; spacing: 8; visible: !root.settingsOpen && !!root.data
+            Flow { Layout.fillWidth: true; spacing: 8; visible: !root.settingsOpen && root.filtersOpen && !!root.data
                 Choice { text: "All accounts"; selected: !root.selection.account; onClicked: root.filterBy("account","") }
                 Repeater { model: root.data ? root.data.accountOptions : []
-                    Choice { required property var modelData; text: modelData.label; selected: root.selection.account===modelData.id; onClicked: root.drill("account",modelData.id,"") }
+                    Choice { required property var modelData; text: modelData.label; selected: root.selection.account===modelData.id; onClicked: root.filterBy("account",modelData.id,"") }
                 }
             }
-            Flow { Layout.fillWidth: true; spacing: 8; visible: !root.settingsOpen && !!root.data && (root.data.modelOptions.length > 1 || !!root.selection.model)
+            Flow { Layout.fillWidth: true; spacing: 8; visible: !root.settingsOpen && root.filtersOpen && !!root.data && (root.data.modelOptions.length > 1 || !!root.selection.model)
                 Choice { text: "All models"; selected: !root.selection.model; onClicked: root.filterBy("model","") }
                 Repeater { model: root.data ? root.modelChips(root.data.modelOptions, root.selection.model) : []
                     Choice { required property var modelData; text: modelData.name; selected: root.selection.model===modelData.id; onClicked: root.filterBy("model",modelData.id,"") }
+                }
+            }
+            Flow { Layout.fillWidth: true; spacing: 8; visible: !root.settingsOpen && root.filtersOpen && !!root.data
+                Sub { text: "Include sources"; topPadding: 9; rightPadding: 6 }
+                Repeater { model: root.data ? root.data.settings.enabled : []
+                    Choice { required property string modelData; text: root.providerName(modelData); selected: !root.isExcluded(modelData); excluded: root.isExcluded(modelData); onClicked: root.toggleSource(modelData) }
                 }
             }
             Sub { Layout.fillWidth: true; visible: !root.settingsOpen && !!root.data && !!root.data.accountWarning; text: root.data ? root.data.accountWarning : ""; wrapMode: Text.WordWrap }
@@ -533,7 +802,65 @@ Scope {
                     width: scroll.availableWidth
                     spacing: 18
                     Card {
-                        width: parent.width; height: pricingNote.implicitHeight + 28
+                        visible: root.pinnedLimits.length > 0
+                        width: parent.width
+                        height: visible ? pinnedColumn.implicitHeight + 32 : 0
+                        Column {
+                            id: pinnedColumn
+                            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                            anchors.margins: 16
+                            spacing: 12
+                            RowLayout {
+                                width: parent.width
+                                Sub { text: root.pinnedLimits.length === 1 ? "PINNED LIMIT" : "PINNED LIMITS"; font.letterSpacing: 1.1; Layout.fillWidth: true }
+                                Sub { text: root.pinnedLimits.length + "/3" }
+                            }
+                            Repeater {
+                                model: root.pinnedLimits
+                                Column {
+                                    required property var modelData
+                                    required property int index
+                                    readonly property var limit: root.pinnedWindow(modelData)
+                                    readonly property var usage: root.pinnedUsages[modelData.provider]
+                                    width: pinnedColumn.width
+                                    spacing: 7
+                                    Rectangle { visible: index > 0; width: parent.width; height: 1; color: root.edge }
+                                    RowLayout {
+                                        width: parent.width
+                                        Label {
+                                            text: root.pinnedName(modelData) + " · " + (modelData.title || modelData.label)
+                                            font.pixelSize: 16; font.weight: Font.DemiBold; elide: Text.ElideRight
+                                            Layout.fillWidth: true
+                                        }
+                                        Label {
+                                            text: limit ? Math.round(Number(limit.percent || 0) * 100) + "% used" : "—"
+                                            font.pixelSize: 16
+                                            color: limit && Number(limit.percent) >= 0.9 ? root.colorFor("claude") : root.ink
+                                        }
+                                        Choice { text: "Unpin"; enabled: !pinSave.running; onClicked: root.unpinLimit(modelData) }
+                                    }
+                                    Rectangle {
+                                        visible: !!limit
+                                        width: parent.width; height: 5; radius: 3; color: root.edge
+                                        Rectangle {
+                                            width: parent.width * Math.min(1, Math.max(0, Number(limit ? limit.percent : 0)))
+                                            height: parent.height; radius: parent.radius
+                                            color: limit && Number(limit.percent) >= 0.9 ? root.colorFor("claude") : root.accent
+                                        }
+                                    }
+                                    Sub {
+                                        width: parent.width; wrapMode: Text.WordWrap
+                                        text: limit ? (usage && usage.limitsStale ? "Last known · " : "")
+                                            + root.pinnedResetText(limit.resetsAt) : "Waiting for this limit's next update"
+                                    }
+                                }
+                            }
+                            Sub { visible: root.pinSaveFailed; text: "Could not update pinned limit" }
+                        }
+                    }
+                    Card {
+                        visible: !root.data || root.data.summary.unpricedTokens > 0 || (root.data.coverage.warnings || []).length > 0
+                        width: parent.width; height: visible ? pricingNote.implicitHeight + 28 : 0
                         Column {
                             id: pricingNote
                             anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 14; spacing: 6
@@ -541,58 +868,86 @@ Scope {
                             Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.data ? "History on "+(root.data.coverage.machine || "this computer")+" · scanned "+root.when(root.data.coverage.scannedAt)+" · "+(root.data.pricing.coveragePercent===null ? "No activity" : (root.data.summary.unpricedTokens && root.data.pricing.coveragePercent>99.9 ? ">99.9" : root.data.pricing.coveragePercent.toFixed(1))+"% of tokens priced") : "" }
                         }
                     }
-                    RowLayout {
+                    ColumnLayout {
                         width: parent.width; spacing: 18
                         Card {
-                            Layout.preferredWidth: 320; Layout.fillHeight: true
-                            // The sessions line wraps on a long history, so the card
-                            // takes its height from the column inside it.
-                            implicitHeight: metricColumn.implicitHeight + 44
+                            Layout.fillWidth: true
+                            implicitHeight: metricColumn.implicitHeight + 36
                             Column {
                                 id: metricColumn
-                                anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 22; spacing: 12
-                                Sub { text: root.metric === "tokens" ? "PROCESSED TOKENS" : "ESTIMATED API VALUE"; font.letterSpacing: 1.2 }
-                                Label { text: root.data ? root.display(root.data.summary) : "…"; font.pixelSize: 36; font.weight: Font.Medium }
-                                Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.data ? root.data.summary.sessions + " sessions · " + root.compact(root.data.summary.requests) + " usage records" + (root.metric === "value" && root.data.summary.unpricedTokens ? " · partial value" : "") : "Scanning local history" }
-                                Rectangle { width: parent.width; height: 1; color: root.edge }
-                                Label {
-                                    text: {
-                                        if (!root.data) return ""
-                                        if (root.metric !== "tokens" && (root.data.summary.unpricedTokens || root.data.previous.unpricedTokens)) return "Value comparison incomplete"
-                                        var cur=root.amount(root.data.summary), prev=root.amount(root.data.previous)
-                                        // A filter narrows both periods the same way, so the
-                                        // comparison stays valid and is worth showing.
-                                        var span = root.days === 1 ? "yesterday so far" : "previous period"
-                                        if (prev <= 0) return Object.keys(root.selection).length
-                                            ? (root.days === 1 ? "No yesterday data for this filter" : "No previous period for this filter")
-                                            : "No previous-period baseline"
-                                        // A model that only just started can be hundreds of times
-                                        // its previous period, and a five-digit percentage reads as
-                                        // a bug, so say the multiple once it is that large.
-                                        var ratio = cur/prev
-                                        if (ratio >= 10) return "↑ " + Math.round(ratio) + "x " + span
-                                        return (cur >= prev ? "↑ " : "↓ ") + Math.abs((ratio-1)*100).toFixed(1) + "% vs " + span
+                                anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 18; spacing: 12
+                                RowLayout { width: parent.width; spacing: 16
+                                    Column { Layout.fillWidth: true; spacing: 6
+                                        Sub { text: root.liveTodayView() ? "PROCESSED TOKENS · TODAY" : "PROCESSED TOKENS"; font.letterSpacing: 1.1 }
+                                        AnimatedTokenCount {
+                                            id: pulseCounter
+                                            visible: root.liveTodayView()
+                                            dataReady: root.liveTodayView()
+                                            targetTokens: root.pulseTokens()
+                                            scopeKey: root.provider + "|" + (root.pulseSummary ? root.pulseSummary.date : "")
+                                            animateChanges: window.visible && !root.settingsOpen
+                                            color: root.ink
+                                            font.family: root.fontFamily
+                                            font.pixelSize: 27
+                                            font.weight: Font.Medium
+                                        }
+                                        Label { visible: !root.liveTodayView(); text: root.data ? root.compact(root.data.summary.tokens) : "…"; font.pixelSize: 31; font.weight: Font.Medium }
+                                        Sub { text: root.liveTodayView() ? root.pulseStatus() : root.data ? root.data.summary.sessions + " sessions" : "Reading history" }
                                     }
-                                    color: root.accent
+                                    Column { Layout.fillWidth: true; spacing: 6
+                                        Sub { text: "OUTPUT"; font.letterSpacing: 1.1 }
+                                        Label { text: root.data ? root.compact(root.data.summary.output) : "…"; font.pixelSize: 24 }
+                                        Sub { text: "Includes reasoning" }
+                                    }
+                                    Column { Layout.fillWidth: true; spacing: 6
+                                        Sub { text: "CACHE READ"; font.letterSpacing: 1.1 }
+                                        Label { text: root.data ? root.compact(root.data.summary.cacheRead) : "…"; font.pixelSize: 24 }
+                                        Sub { text: root.data && root.data.summary.tokens ? (root.data.summary.cacheRead/root.data.summary.tokens*100).toFixed(1)+"% of processed tokens" : "No activity" }
+                                    }
+                                    Column { Layout.fillWidth: true; spacing: 6
+                                        Sub { text: "API VALUE ESTIMATE"; font.letterSpacing: 1.1 }
+                                        Label { text: root.data ? root.valueText(root.data.summary) : "…"; font.pixelSize: 24 }
+                                        Sub { text: "Separate from plan charges" }
+                                    }
                                 }
-                                Label { width: parent.width; wrapMode: Text.WordWrap; text: root.data && root.data.summary.tokens ? (root.data.summary.cacheRead/root.data.summary.tokens*100).toFixed(1)+"% cached input reused" : "No recorded tokens"; color: root.colorFor("codex") }
-                                Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.data ? root.compact(root.data.summary.output)+" output tokens, including reasoning" : "" }
-                                Sub { width: parent.width; wrapMode: Text.WordWrap; text: root.metric === "tokens" ? "Processed tokens count reused context on every request. This is not a count of unique text." : "Catalog rates or the app’s recorded API estimate. This is not your bill." }
+                                Rectangle { width: parent.width; height: 1; color: root.edge }
+                                RowLayout { width: parent.width
+                                    Label { visible: root.comparisonText() !== ""; text: root.comparisonText(); color: root.accent; font.pixelSize: 12 }
+                                    Item { Layout.fillWidth: true }
+                                    Sub { text: "Processed tokens include reused context on each request" }
+                                }
                             }
                         }
                         Card {
-                            Layout.fillWidth: true; Layout.fillHeight: true; implicitHeight: 248
+                            Layout.fillWidth: true
+                            implicitHeight: root.data && root.data.hourly.length ? hourlyView.implicitHeight + 90 : 248
                             ColumnLayout {
                                 anchors.fill: parent; anchors.margins: 18; spacing: 10
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    Label { text: root.selection.day ? "Hourly activity · "+root.selection.day : root.days === 1 ? "Hourly activity · today" : "Daily activity"; font.weight: Font.DemiBold }
+                                    Label { text: root.selection.hourStart ? "Selected hour" : root.selection.day ? "Tokens by hour · "+root.selection.day : root.days === 1 ? "Tokens by hour · today" : "Daily activity"; font.weight: Font.DemiBold; font.pixelSize: 16 }
                                     Item { Layout.fillWidth: true }
                                     Choice { text: "Tokens"; selected: root.metric === "tokens"; onClicked: root.metric = "tokens" }
                                     Choice { text: "API value"; selected: root.metric === "value"; onClicked: root.metric = "value" }
                                 }
+                                HourlyActivity {
+                                    id: hourlyView
+                                    visible: root.data && root.data.hourly.length > 0
+                                    Layout.fillWidth: true
+                                    hours: root.data ? root.data.hourly : []
+                                    unplaced: root.data ? root.data.hourlyUnplaced : ({total:{tokens:0,value:0}})
+                                    metric: root.metric
+                                    selectedHour: Number(root.selection.hourStart || -1)
+                                    fontFamily: root.fontFamily; ink: root.ink; muted: root.muted; edge: root.edge; accent: root.accent
+                                    sourceColor: function(id) { return root.colorFor(id) }
+                                    sourceName: function(id) { return root.providerName(id) }
+                                    formatHour: function(start) { return root.localClock(start) }
+                                    formatHourTitle: function(hour) { return root.hourTitle(hour) }
+                                    onHourSelected: start => { if (Number(root.selection.hourStart || -1) !== start) root.drillHour(start) }
+                                }
                                 Canvas {
                                     id: chart
+                                    visible: !root.data || root.data.hourly.length === 0
                                     Layout.fillWidth: true; Layout.fillHeight: true
                                     property int hovered: -1
                                     property real pointerX: width/2
@@ -601,6 +956,7 @@ Scope {
                                     property string metric: root.metric
                                     onSeriesChanged: requestPaint()
                                     onMetricChanged: requestPaint()
+                                    Connections { target: root; function onClockUses24HourChanged() { chart.requestPaint() } }
                                     onHoveredChanged: requestPaint()
                                     onWidthChanged: requestPaint()
                                     onHeightChanged: requestPaint()
@@ -613,7 +969,8 @@ Scope {
                                             return
                                         }
                                         var cards=root.data ? root.data.cards : [], ids=cards.map(c=>c.id), max=1
-                                        for (var d of series) for (var id of ids) max=Math.max(max,root.amount(d.cards[id]))
+                                        function total(d) { return root.amount(d.total) }
+                                        for (var d of series) max=Math.max(max,total(d))
                                         ctx.font="10px \""+root.fontFamily+"\""; ctx.lineWidth=1
                                         for(var t=0;t<3;t++) {
                                             var y=top+(bottom-top)*t/2
@@ -631,23 +988,18 @@ Scope {
                                                     ctx.fillRect(center-totalWidth/2+j*(bw+gap),bottom-barHeight,bw,barHeight)
                                                 }
                                                 if(series.length<=8 || i%3===0 || i===series.length-1) {
-                                                    ctx.fillStyle=root.muted;ctx.textAlign="center";ctx.fillText(series[i].label,center,h-5);ctx.textAlign="left"
+                                                    ctx.fillStyle=root.muted;ctx.textAlign="center";ctx.fillText(root.localClock(series[i].start),center,h-5);ctx.textAlign="left"
                                                 }
                                             }
                                         } else {
-                                            for (var k=0;k<ids.length;k++) {
-                                                ctx.beginPath()
-                                                for(var i=0;i<series.length;i++) {
-                                                    var x=left+(series.length===1?plot/2:i*plot/(series.length-1))
-                                                    var yy=bottom-root.amount(series[i].cards[ids[k]])/max*(bottom-top)
-                                                    if(i===0)ctx.moveTo(x,yy);else ctx.lineTo(x,yy)
-                                                }
-                                                ctx.strokeStyle=root.accountColor(cards[k].provider,cards[k].shade);ctx.lineWidth=cards[k].shade===0?2.3:1.8
-                                                ctx.setLineDash(cards[k].shades>1 && cards[k].shade>0 ? (cards[k].shade===1?[5,4]:[2,2]) : [])
-                                                ctx.stroke();ctx.setLineDash([])
-                                                if(series.length===1){ctx.beginPath();ctx.arc(x,yy,4,0,2*Math.PI);ctx.fillStyle=root.accountColor(cards[k].provider,cards[k].shade);ctx.fill()}
-                                                else if(ids.length <= 3 && cards[k].shade===0) {ctx.lineTo(left+plot,bottom);ctx.lineTo(left,bottom);ctx.closePath();ctx.fillStyle=Qt.alpha(root.accountColor(cards[k].provider,cards[k].shade),0.07);ctx.fill()}
+                                            ctx.beginPath()
+                                            for(var i=0;i<series.length;i++) {
+                                                var x=left+(series.length===1?plot/2:i*plot/(series.length-1))
+                                                var yy=bottom-total(series[i])/max*(bottom-top)
+                                                if(i===0)ctx.moveTo(x,yy);else ctx.lineTo(x,yy)
                                             }
+                                            ctx.strokeStyle=root.accent;ctx.lineWidth=2.5;ctx.stroke()
+                                            if(series.length>1){ctx.lineTo(left+plot,bottom);ctx.lineTo(left,bottom);ctx.closePath();ctx.fillStyle=Qt.alpha(root.accent,0.10);ctx.fill()}
                                             ctx.fillStyle=root.muted
                                             if(series.length){ctx.fillText(series[0].date.slice(5),left,h-5);ctx.fillText(series[series.length-1].date.slice(5),w-42,h-5)}
                                         }
@@ -667,15 +1019,56 @@ Scope {
                                         visible: chart.hovered>=0 && chart.hovered<chart.series.length
                                         x: chart.pointerX > chart.width/2 ? 48 : Math.max(0,chart.width-width-12)
                                         y: 16
-                                        heading: chart.hovered>=0 && chart.hovered<chart.series.length ? (chart.hourly ? chart.series[chart.hovered].title : Qt.formatDate(new Date(chart.series[chart.hovered].date+"T12:00:00"),"dddd, MMM d")) : ""
-                                        rows: chart.hovered>=0 && chart.hovered<chart.series.length && root.data ? root.data.cards.map(c=>({label:c.name,value:root.display(chart.series[chart.hovered].cards[c.id]),color:root.accountColor(c.provider,c.shade)})) : []
+                                        heading: chart.hovered>=0 && chart.hovered<chart.series.length ? (chart.hourly ? root.hourTitle(chart.series[chart.hovered]) : Qt.formatDate(new Date(chart.series[chart.hovered].date+"T12:00:00"),"dddd, MMM d")) : ""
+                                        rows: chart.hovered>=0 && chart.hovered<chart.series.length && root.data ? [{label:"Total",value:root.display(chart.series[chart.hovered].total),color:root.accent}].concat(root.data.cards.map(c=>({label:c.name,value:root.display(chart.series[chart.hovered].cards[c.id]),color:root.accountColor(c.provider,c.shade)}))) : []
                                         detail: (chart.hourly ? "This hour · " : "") + (root.metric === "tokens" ? "Processed tokens, including cached input" : "Estimated API value, not your bill")
                                     }
                                 }
                             }
                         }
                     }
+                    Card {
+                        width: parent.width; height: sourceColumn.implicitHeight + 36
+                        Column {
+                            id: sourceColumn
+                            anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 18
+                            spacing: 6
+                            RowLayout { width: parent.width
+                                Label { text: "Sources and accounts"; font.pixelSize: 16; font.weight: Font.DemiBold }
+                                Item { Layout.fillWidth: true }
+                                Choice { text: root.providerDetailsOpen ? "Hide details" : "Show limits and models"; onClicked: root.providerDetailsOpen = !root.providerDetailsOpen }
+                            }
+                            RowLayout { width: parent.width; spacing: 12
+                                Item { Layout.preferredWidth: 7 }
+                                Item { Layout.preferredWidth: 190 }
+                                Item { Layout.fillWidth: true }
+                                Sub { text: "LIMIT"; Layout.preferredWidth: 65; horizontalAlignment: Text.AlignRight }
+                                Sub { text: "TOKENS"; Layout.preferredWidth: 78; horizontalAlignment: Text.AlignRight }
+                                Sub { text: "API VALUE"; Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight }
+                            }
+                            Repeater {
+                                model: root.data ? root.data.cards.slice(0, root.providerRowsExpanded ? root.data.cards.length : 6) : []
+                                Item {
+                                    required property var modelData
+                                    width: sourceColumn.width; height: 40
+                                    RowLayout { anchors.fill: parent; spacing: 12
+                                        Rectangle { implicitWidth: 7; implicitHeight: 7; radius: 4; color: root.accountColor(modelData.provider,modelData.shade) }
+                                        Label { text: modelData.name; Layout.preferredWidth: 190; elide: Text.ElideRight; font.pixelSize: 12 }
+                                        Rectangle { Layout.fillWidth: true; implicitHeight: 5; radius: 3; color: root.edge
+                                            Rectangle { width: parent.width * (root.data && root.data.summary.tokens ? modelData.tokens/root.data.summary.tokens : 0); height: parent.height; radius: parent.radius; color: root.accountColor(modelData.provider,modelData.shade) }
+                                        }
+                                        Sub { text: modelData.quota.limits && modelData.quota.limits.length ? (modelData.quota.limits[0].percent*100).toFixed(0)+"% limit" : ""; Layout.preferredWidth: 65; horizontalAlignment: Text.AlignRight }
+                                        Label { text: root.compact(modelData.tokens); Layout.preferredWidth: 78; horizontalAlignment: Text.AlignRight; font.pixelSize: 12 }
+                                        Sub { text: root.valueText(modelData); Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight; elide: Text.ElideRight }
+                                    }
+                                }
+                            }
+                            Choice { visible: !!root.data && root.data.cards.length > 6; text: root.providerRowsExpanded ? "Show fewer sources" : "Show all " + (root.data ? root.data.cards.length : 0) + " sources and accounts"; onClicked: root.providerRowsExpanded = !root.providerRowsExpanded }
+                        }
+                    }
                     GridLayout {
+                        visible: root.providerDetailsOpen
+                        height: visible ? implicitHeight : 0
                         width: parent.width; columns: root.data ? (root.data.cards.length > 3 ? 2 : Math.max(1,root.data.cards.length)) : 3; rowSpacing: 14; columnSpacing: 14
                         Repeater {
                             model: root.data ? root.data.cards : []
@@ -706,7 +1099,7 @@ Scope {
                                     }
                                     Sub {
                                         width: parent.width; wrapMode: Text.WordWrap
-                                        text: modelData.monthlyPrice !== null ? root.money(modelData.monthlyPrice)+"/month plan · "+(modelData.monthlyPrice>0?(modelData.value/modelData.monthlyPrice).toFixed(1)+"× plan price in this period":"no plan charge") : "Monthly plan price not set"
+                                        text: modelData.monthlyPrice !== null ? "Monthly plan: "+root.money(modelData.monthlyPrice) : "Monthly plan price not set"
                                     }
                                     Sub { visible: modelData.provider === "grok"; width: parent.width; wrapMode: Text.WordWrap; text: root.compact(modelData.modelCalls || 0)+" model calls · "+modelData.requests+" usage records" }
                                     Sub { visible: !root.selection.account && modelData.quotaScope !== ""; text: modelData.quotaScope }
@@ -929,8 +1322,10 @@ Scope {
                             }
                         }
                     }
+                    Choice { text: root.coverageOpen ? "Hide data details" : "Data coverage and pricing details"; onClicked: root.coverageOpen = !root.coverageOpen }
                     Card {
-                        width: parent.width; height: coverageColumn.implicitHeight+36
+                        visible: root.coverageOpen
+                        width: parent.width; height: visible ? coverageColumn.implicitHeight+36 : 0
                         Column {
                             id: coverageColumn
                             anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 18; spacing: 9
@@ -974,8 +1369,13 @@ Scope {
                     width: settingsScroll.availableWidth; spacing: 18
                     Label { text: "Make it yours"; font.pixelSize: 24; font.weight: Font.DemiBold }
                     Sub { text: "Analytics preferences stay on this machine. Existing app credentials are read, never changed." }
-                    Label { text: "Visible providers"; font.pixelSize: 16 }
-                    Flow { width: parent.width; spacing: 10
+                    Flow { width: parent.width; spacing: 8
+                        Repeater { model: [{id:"sources",name:"Sources"},{id:"accounts",name:"Accounts"},{id:"pricing",name:"Pricing"},{id:"sync",name:"Sync"},{id:"appearance",name:"Appearance"}]
+                            Choice { required property var modelData; text: modelData.name; selected: root.settingsTab === modelData.id; onClicked: root.settingsTab = modelData.id }
+                        }
+                    }
+                    Label { visible: root.settingsTab === "sources"; text: "Visible providers"; font.pixelSize: 16 }
+                    Flow { visible: root.settingsTab === "sources"; width: parent.width; spacing: 10
                         Repeater { model: root.providerOptions
                             Choice {
                                 required property var modelData
@@ -984,8 +1384,9 @@ Scope {
                             }
                         }
                     }
-                    Label { text: "Window transparency"; font.pixelSize: 16 }
+                    Label { visible: root.settingsTab === "appearance"; text: "Window transparency"; font.pixelSize: 16 }
                     RowLayout {
+                        visible: root.settingsTab === "appearance"
                         width: 460; spacing: 18
                         Slider {
                             id: opacitySlider
@@ -1003,10 +1404,10 @@ Scope {
                         }
                         Sub { text: (opacitySlider.value*100).toFixed(1)+"% opacity" }
                     }
-                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Drag to preview. Save preferences to keep it. At 100%, the background is fully opaque." }
-                    Label { text: "Monthly subscription prices · USD"; font.pixelSize: 16 }
-                    Sub { text: "Optional. API value is compared with this price; it is not an invoice or a billing-cycle calculation." }
-                    Flow { width: parent.width; spacing: 14
+                    Sub { visible: root.settingsTab === "appearance"; width: parent.width; wrapMode: Text.WordWrap; text: "Drag to preview. Save preferences to keep it. At 100%, the background is fully opaque." }
+                    Label { visible: root.settingsTab === "pricing"; text: "Monthly subscription prices · USD"; font.pixelSize: 16 }
+                    Sub { visible: root.settingsTab === "pricing"; text: "Optional. API value is an estimate, separate from subscription charges." }
+                    Flow { visible: root.settingsTab === "pricing"; width: parent.width; spacing: 14
                         Repeater { model: root.providerOptions.filter(p => root.draftEnabled.indexOf(p.id)>=0)
                             Column {
                                 required property var modelData
@@ -1030,25 +1431,26 @@ Scope {
                             }
                         }
                     }
-                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Prices on a provider apply to the local history group; prices on a labelled account apply only to that account." }
-                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Quota sources: Grok and Muse read their existing logins; Ollama Cloud, CommandCode, and ClinePass read a key here, an environment variable, or a key file under ~/.config/omarchy/ai-usage. The dashboard never changes credentials and sends a key only to the provider it belongs to." }
-                    Label { text: "Ollama Cloud API key"; font.pixelSize: 16 }
-                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Optional. Only needed to show Ollama Cloud usage limits; local token history works without it. Leave blank to use the environment or the key file." }
-                    Field { width: 420; text: root.draftOllamaKey; placeholderText: "Not set"; echoMode: TextInput.Password; onTextEdited: root.draftOllamaKey = text; Accessible.name: "Ollama Cloud API key" }
-                    Label { text: "CommandCode API key"; font.pixelSize: 16 }
-                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Optional. Only needed to show CommandCode plan usage; token history comes from Hermes and works without it. Leave blank to use the environment or ~/.config/omarchy/ai-usage/commandcode.key." }
-                    Field { width: 420; text: root.draftCommandCodeKey; placeholderText: "Not set"; echoMode: TextInput.Password; onTextEdited: root.draftCommandCodeKey = text; Accessible.name: "CommandCode API key" }
-                    Label { text: "ClinePass API key"; font.pixelSize: 16 }
-                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Optional. Only needed to show ClinePass plan usage; token history comes from Hermes and works without it. Leave blank to use CLINE_API_KEY or ~/.config/omarchy/ai-usage/clinepass.key." }
-                    Field { width: 420; text: root.draftClinePassKey; placeholderText: "Not set"; echoMode: TextInput.Password; onTextEdited: root.draftClinePassKey = text; Accessible.name: "ClinePass API key" }
-                    Label { text: "History accounts"; font.pixelSize: 16 }
-                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Label agent home folders by account. Keep mirrored folders under the same account. Labels do not switch logins; quota is only for the current login on this PC." }
-                    Field { width: 260; text: root.draftLocalLabel; placeholderText: "Local account name"; onTextEdited: root.draftLocalLabel = text; Accessible.name: "Local account name" }
+                    Sub { visible: root.settingsTab === "pricing"; width: parent.width; wrapMode: Text.WordWrap; text: "Prices on a provider apply to the local history group; prices on a labelled account apply only to that account." }
+                    Sub { visible: root.settingsTab === "sources"; width: parent.width; wrapMode: Text.WordWrap; text: "Quota sources: Grok and Muse read their existing logins; Ollama Cloud, CommandCode, and ClinePass read a key here, an environment variable, or a key file under ~/.config/omarchy/ai-usage." }
+                    Label { visible: root.settingsTab === "sources"; text: "Ollama Cloud API key"; font.pixelSize: 16 }
+                    Sub { visible: root.settingsTab === "sources"; width: parent.width; wrapMode: Text.WordWrap; text: "Optional. Only needed for Ollama Cloud limits; token history works without it." }
+                    Field { visible: root.settingsTab === "sources"; width: 420; text: root.draftOllamaKey; placeholderText: "Not set"; echoMode: TextInput.Password; onTextEdited: root.draftOllamaKey = text; Accessible.name: "Ollama Cloud API key" }
+                    Label { visible: root.settingsTab === "sources"; text: "CommandCode API key"; font.pixelSize: 16 }
+                    Sub { visible: root.settingsTab === "sources"; width: parent.width; wrapMode: Text.WordWrap; text: "Optional. Only needed for CommandCode plan limits; token history works without it." }
+                    Field { visible: root.settingsTab === "sources"; width: 420; text: root.draftCommandCodeKey; placeholderText: "Not set"; echoMode: TextInput.Password; onTextEdited: root.draftCommandCodeKey = text; Accessible.name: "CommandCode API key" }
+                    Label { visible: root.settingsTab === "sources"; text: "ClinePass API key"; font.pixelSize: 16 }
+                    Sub { visible: root.settingsTab === "sources"; width: parent.width; wrapMode: Text.WordWrap; text: "Optional. Only needed for ClinePass plan limits; token history works without it." }
+                    Field { visible: root.settingsTab === "sources"; width: 420; text: root.draftClinePassKey; placeholderText: "Not set"; echoMode: TextInput.Password; onTextEdited: root.draftClinePassKey = text; Accessible.name: "ClinePass API key" }
+                    Label { visible: root.settingsTab === "accounts"; text: "History accounts"; font.pixelSize: 16 }
+                    Sub { visible: root.settingsTab === "accounts"; width: parent.width; wrapMode: Text.WordWrap; text: "Label agent home folders by account. Keep mirrored folders under the same account. Labels do not switch logins; quota is only for the current login on this PC." }
+                    Field { visible: root.settingsTab === "accounts"; width: 260; text: root.draftLocalLabel; placeholderText: "Local account name"; onTextEdited: root.draftLocalLabel = text; Accessible.name: "Local account name" }
                     Repeater { model: root.draftAccounts
                         Column {
                             id: accountEditor
                             required property var modelData
                             required property int index
+                            visible: root.settingsTab === "accounts"
                             width: parent.width; spacing: 10
                             RowLayout { width: parent.width
                                 Field { Layout.fillWidth: true; text: accountEditor.modelData.label; placeholderText: "Account name, e.g. Work"; onTextEdited: root.draftAccounts[accountEditor.index].label = text }
@@ -1071,12 +1473,13 @@ Scope {
                             Rectangle { width: parent.width; height: 1; color: root.edge }
                         }
                     }
-                    Choice { text: "Add account"; onClicked: { root.draftAccounts=root.draftAccounts.concat([{id:"account-"+Date.now()+"-"+Math.random().toString(36).slice(2,8),label:"",directories:[{provider:"codex",path:""}]}]) } }
-                    Label { text: "Unlabelled additional history folders"; font.pixelSize: 16 }
-                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "One full home-folder path per line, such as /mnt/other-computer/.codex. Use folders you have already mounted or synced. No remote connection is made. Copies with stable session IDs are deduplicated." }
+                    Choice { visible: root.settingsTab === "accounts"; text: "Add account"; onClicked: { root.draftAccounts=root.draftAccounts.concat([{id:"account-"+Date.now()+"-"+Math.random().toString(36).slice(2,8),label:"",directories:[{provider:"codex",path:""}]}]) } }
+                    Label { visible: root.settingsTab === "accounts"; text: "Unlabelled additional history folders"; font.pixelSize: 16 }
+                    Sub { visible: root.settingsTab === "accounts"; width: parent.width; wrapMode: Text.WordWrap; text: "One full home-folder path per line, such as /mnt/other-computer/.codex. Use folders you have already mounted or synced. No remote connection is made. Copies with stable session IDs are deduplicated." }
                     Repeater { model: root.homeOptions.filter(h => root.draftEnabled.indexOf(h.key.replace(/Homes$/, ""))>=0 || (h.key === "opencodeHomes" && root.draftEnabled.indexOf("opencode-go")>=0) || (h.key === "hermesHomes" && ["opencode-go", "ollama-cloud", "commandcode"].some(id => root.draftEnabled.indexOf(id) >= 0)))
                         Column {
                             required property var modelData
+                            visible: root.settingsTab === "accounts"
                             width: parent.width; spacing: 6
                             Sub { text: modelData.name }
                             Homes { width: parent.width; height: 70; placeholderText: modelData.example; Accessible.name: modelData.name
@@ -1085,13 +1488,14 @@ Scope {
                             }
                         }
                     }
-                    Label { text: "Synced machines"; font.pixelSize: 16 }
-                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Point every machine at one synced folder. Each writes its own ledger snapshot and imports the others, so totals, charts, heatmap, and model breakdowns cover all of them. Only token counters and names are shared; prompts, paths outside the ledger, and credentials stay local." }
-                    Field { width: parent.width; text: root.draftLedgerSyncDir; placeholderText: "Shared folder, e.g. ~/Sync/ai-usage"; onTextEdited: root.draftLedgerSyncDir = text; Accessible.name: "Synced ledger folder" }
-                    Field { width: 260; text: root.draftLedgerDeviceId; placeholderText: "Device id, e.g. desktop"; onTextEdited: root.draftLedgerDeviceId = text; Accessible.name: "Synced ledger device id" }
-                    Sub { width: parent.width; wrapMode: Text.WordWrap; text: "The device id names this machine's snapshot ("+(root.draftLedgerDeviceId||"hostname")+".sqlite) and must be unique per machine. Leave it blank to use the hostname. Other machines appear as extra accounts you can filter." }
+                    Label { visible: root.settingsTab === "sync"; text: "Synced machines"; font.pixelSize: 16 }
+                    Sub { visible: root.settingsTab === "sync"; width: parent.width; wrapMode: Text.WordWrap; text: "Point each machine at one synced folder. Each writes a ledger snapshot and imports the others. Token counters, timestamps, model names, and source paths are included." }
+                    Field { visible: root.settingsTab === "sync"; width: parent.width; text: root.draftLedgerSyncDir; placeholderText: "Shared folder, e.g. ~/Sync/ai-usage"; onTextEdited: root.draftLedgerSyncDir = text; Accessible.name: "Synced ledger folder" }
+                    Field { visible: root.settingsTab === "sync"; width: 260; text: root.draftLedgerDeviceId; placeholderText: "Device id, e.g. desktop"; onTextEdited: root.draftLedgerDeviceId = text; Accessible.name: "Synced ledger device id" }
+                    Sub { visible: root.settingsTab === "sync"; width: parent.width; wrapMode: Text.WordWrap; text: "The device id names this machine's snapshot ("+(root.draftLedgerDeviceId||"hostname")+".sqlite) and must be unique per machine." }
                     Card {
-                        width: parent.width; height: 88
+                        visible: root.settingsTab === "sources"
+                        width: parent.width; height: visible ? 88 : 0
                         Column { anchors.fill: parent; anchors.margins: 16; spacing: 8
                             Label { text: "OpenCode Go connection" }
                             Sub { width: parent.width; wrapMode: Text.WordWrap; text: "Uses the existing OpenCode Go API key in OpenCode. No cookie is needed. Quota is refreshed in the background; reconnect in OpenCode if authentication expires." }

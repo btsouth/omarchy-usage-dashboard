@@ -9,6 +9,7 @@ import math
 import json
 import os
 from pathlib import Path
+import re
 import select
 import socket
 import struct
@@ -25,6 +26,8 @@ import uuid
 HOME = Path.home()
 STATE = Path(os.getenv('XDG_STATE_HOME', HOME / '.local/state')) / 'omarchy/ai-usage'
 CONFIG = Path(os.getenv('XDG_CONFIG_HOME', HOME / '.config')) / 'omarchy/ai-usage/settings.json'
+PINNED_LIMIT = CONFIG.with_name('pinned-limit.json')
+MAX_PINNED_LIMITS = 3
 PROVIDERS = {'codex': 'Codex', 'claude': 'Claude', 'opencode-go': 'OpenCode Go', 'grok': 'Grok Build',
              'gemini': 'Gemini CLI', 'opencode': 'OpenCode', 'pi': 'Pi', 'omp': 'Oh My Pi', 'muse': 'Muse',
              'ollama-cloud': 'Ollama Cloud', 'commandcode': 'CommandCode',
@@ -108,6 +111,52 @@ def atomic_json(path, value):
 def settings():
     try: return DEFAULTS | json.loads(CONFIG.read_text())
     except (OSError, ValueError): return dict(DEFAULTS)
+
+
+def valid_pin(value):
+    if not isinstance(value, dict): return None
+    provider, label = value.get('provider'), value.get('label')
+    if not isinstance(provider, str) or not isinstance(label, str): return None
+    # Same rule the panel and dashboard loaders apply, so a saved pin is never one they drop.
+    if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,79}', provider): return None
+    if not label or len(label) > 120: return None
+    title = value.get('title', '')
+    if not isinstance(title, str) or len(title) > 120: return None
+    return {'provider': provider, 'label': label, 'title': title}
+
+
+def pinned_limits():
+    try: value = json.loads(PINNED_LIMIT.read_text())
+    except (OSError, ValueError): return []
+    if not isinstance(value, dict): return []
+    entries = value.get('pins') if isinstance(value.get('pins'), list) else [value]
+    pins = []
+    for entry in entries:
+        pin = valid_pin(entry)
+        if pin and pin not in pins: pins.append(pin)
+    return pins[:MAX_PINNED_LIMITS]
+
+
+def pinned_limit():
+    """Compatibility for callers expecting the first pinned window."""
+    return next(iter(pinned_limits()), None)
+
+
+def save_pinned_limit(provider, label, title='', remove=False):
+    pins = pinned_limits()
+    if provider == label == '' and not remove:
+        pins = []
+    else:
+        pin = valid_pin({'provider': provider, 'label': label, 'title': title})
+        if not pin: raise ValueError('Choose a source and limit window to pin.')
+        if remove:
+            pins = [entry for entry in pins if entry != pin]
+        elif pin not in pins:
+            if len(pins) >= MAX_PINNED_LIMITS:
+                raise ValueError('You can pin up to three limits. Unpin one first.')
+            pins.append(pin)
+    atomic_json(PINNED_LIMIT, {'pins': pins})
+    return pins
 
 
 def provider_key(value):
@@ -298,6 +347,7 @@ def digest(*parts):
 def record(key, provider, session, ts, model, project, client, **tokens):
     return {'id': key, 'provider': provider, 'session': session, 'ts': timestamp(ts),
             'model': model or 'unknown', 'project': str(project or ''), 'client': client,
+            'timePrecision': 'event',
             **{f: number(tokens.get(f)) for f in FIELDS}}
 
 
@@ -799,6 +849,7 @@ def hermes_records(path):
                            input=r.get('input_tokens'), output=r.get('output_tokens'),
                            reasoning=r.get('reasoning_tokens'), cacheRead=r.get('cache_read_tokens'),
                            cacheWrite=r.get('cache_write_tokens'))
+            entry['timePrecision'] = 'session'
             entry['apiProvider'] = route
             entry['modelCalls'] = number(r.get('api_call_count'))
             entry['reportedValue'] = reported_value(r.get('estimated_cost_usd'))
@@ -853,6 +904,8 @@ class Ledger:
             if name not in columns: self.db.execute(f'ALTER TABLE events ADD COLUMN {name} INTEGER')
         for name, kind in [('reportedValue', 'REAL'), ('apiProvider', 'TEXT')]:
             if name not in columns: self.db.execute(f'ALTER TABLE events ADD COLUMN {name} {kind}')
+        if 'timePrecision' not in columns:
+            self.db.execute('ALTER TABLE events ADD COLUMN timePrecision TEXT')
 
     def put(self, r, source=None, growing=False):
         if not r['ts'] or (not sum(r[f] for f in FIELDS[:4]) and not r.get('turns')): return
@@ -867,6 +920,7 @@ class Ledger:
         update += ',turns=MAX(COALESCE(events.turns,0),COALESCE(excluded.turns,0))'
         update += ",reportedValue=CASE WHEN excluded.provider='cursor' THEN excluded.reportedValue ELSE COALESCE(MAX(COALESCE(events.reportedValue,0),excluded.reportedValue),events.reportedValue) END"
         update += ',apiProvider=COALESCE(excluded.apiProvider,events.apiProvider)'
+        update += ',timePrecision=COALESCE(excluded.timePrecision,events.timePrecision)'
         self.db.execute(f'INSERT INTO events ({",".join(keys)}) VALUES ({",".join("?" for _ in keys)}) '
                         f'ON CONFLICT(id) DO UPDATE SET {update}', list(r.values()))
         if source is not None:
@@ -935,7 +989,7 @@ class Ledger:
         finally:
             conn.close()
 
-    def scan(self, cfg, force=False):
+    def scan(self, cfg, force=False, local_only=False):
         cfg = dict(cfg)
         for account in cfg.get('accounts', []):
             for directory in account['directories']:
@@ -986,7 +1040,7 @@ class Ledger:
             opencode = root / 'opencode.db'
             source = {'provider': 'opencode', 'path': str(opencode), 'files': int(opencode.exists()), 'exists': opencode.exists(), 'kind': 'database'}
             sources.append(source)
-            if opencode.exists():
+            if opencode.exists() and (not local_only or self.database_changed(opencode)):
                 conn = None
                 try:
                     conn = sqlite3.connect(opencode.resolve().as_uri() + '?mode=ro', uri=True, timeout=3)
@@ -1000,6 +1054,7 @@ class Ledger:
                     for mid, sid, ts, project, model, route, raw, cost in conn.execute(query):
                         self.put(opencode_record(mid, sid, ts, project, model, route,
                                                  json.loads(raw or '{}'), cost, default_provider), opencode.resolve())
+                    if local_only: self.remember_database(opencode)
                 except (sqlite3.Error, ValueError, TypeError, AttributeError):
                     source['readErrors'] = 1
                     warnings.append('OpenCode database could not be read; retained previous records.')
@@ -1012,12 +1067,17 @@ class Ledger:
                 sources.append(source)
                 for path in files:
                     try:
+                        stat = path.stat()
+                        if local_only and self.db.execute('SELECT size,mtime FROM files WHERE path=?', (str(path),)).fetchone() == (stat.st_size, stat.st_mtime_ns):
+                            continue
                         for item in json_records(path):
                             if item.get('role') != 'assistant': continue
                             self.put(opencode_record(item.get('id') or path.stem, item.get('sessionID') or path.parent.name,
                                 (item.get('time') or {}).get('created'), (item.get('path') or {}).get('cwd'),
                                 item.get('modelID'), item.get('providerID'), item.get('tokens') or {}, item.get('cost'),
                                 default_provider), path.resolve())
+                        if local_only:
+                            self.db.execute('INSERT OR REPLACE INTO files VALUES (?,?,?)', (str(path), stat.st_size, stat.st_mtime_ns))
                     except (OSError, ValueError, TypeError, AttributeError):
                         source['readErrors'] = source.get('readErrors', 0) + 1
         hermes_roots = [str(HOME / '.hermes')] + cfg.get('hermesHomes', [])
@@ -1026,7 +1086,7 @@ class Ledger:
             source = {'provider': 'hermes', 'path': str(path), 'files': int(path.exists()),
                       'exists': path.exists(), 'kind': 'database', 'clients': list(HERMES_ROUTES)}
             sources.append(source)
-            if not path.exists(): continue
+            if not path.exists() or (local_only and not self.database_changed(path)): continue
             try:
                 for item in hermes_records(path):
                     # The task dimension the CLI apps do not record, kept in the
@@ -1036,21 +1096,44 @@ class Ledger:
                     if item['task'] != 'conversation':
                         entry['client'] = 'Hermes · ' + item['task']
                     self.put(entry, path.resolve(), growing=True)
+                if local_only: self.remember_database(path)
             except (sqlite3.Error, ValueError, TypeError, AttributeError, KeyError):
                 source['readErrors'] = 1
                 warnings.append('Hermes database could not be read; retained previous records.')
 
-        if 'cursor' in cfg.get('enabled', []) and os.getenv('AI_USAGE_DEMO') != '1':
+        if not local_only and 'cursor' in cfg.get('enabled', []) and os.getenv('AI_USAGE_DEMO') != '1':
             csource, cwarnings = cursor_usage(self, force=force)
             sources.append(csource)
             warnings.extend(cwarnings)
         for source in sources:
             source['status'] = 'missing' if not source['exists'] else 'partial' if source.get('readErrors') else 'available'
-        warnings.extend(self.sync_ledgers(cfg))
+        if not local_only: warnings.extend(self.sync_ledgers(cfg))
         meta = {'sources': sources, 'warnings': warnings, 'scannedAt': time.time(), 'machine': 'demo-computer' if os.getenv('AI_USAGE_DEMO') == '1' else socket.gethostname()}
-        self.db.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)', ('scan', json.dumps(meta)))
+        if not local_only:
+            self.db.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)', ('scan', json.dumps(meta)))
         self.db.commit()
         return meta
+
+    def database_signature(self, path):
+        # SQLite writers can leave the main file untouched while appending to
+        # WAL. Include both so an active OpenCode or Hermes database is read
+        # again when its usage changes.
+        signature = []
+        for candidate in (path, Path(str(path) + '-wal')):
+            try:
+                stat = candidate.stat()
+                signature.append((stat.st_size, stat.st_mtime_ns))
+            except OSError:
+                signature.append(None)
+        return json.dumps(signature)
+
+    def database_changed(self, path):
+        stored = self.db.execute('SELECT value FROM metadata WHERE key=?', ('pulseDatabase:' + str(path),)).fetchone()
+        return not stored or stored[0] != self.database_signature(path)
+
+    def remember_database(self, path):
+        self.db.execute('INSERT OR REPLACE INTO metadata VALUES (?,?)',
+                        ('pulseDatabase:' + str(path), self.database_signature(path)))
 
 
 def load_rates():
@@ -1718,6 +1801,53 @@ def selected(r, selection, provider):
     return True
 
 
+def timed_event(r):
+    # Older ledgers and synced snapshots predate timePrecision. Hermes rows
+    # already carry their source name in client, so they remain identifiable.
+    precision = r.get('timePrecision')
+    return precision == 'event' or (precision is None and not str(r.get('client') or '').startswith('Hermes'))
+
+
+def hourly_snapshot(ledger, now=None):
+    """A small, local panel feed. Quota records have a different writer and
+    cannot reliably carry hourly history, so the panel reads this file.
+    """
+    now = now or dt.datetime.now().astimezone()
+    day = now.date()
+    start = int(dt.datetime.combine(day, dt.time()).timestamp())
+    end = int(now.timestamp())
+    hours = [{'start': ts, 'label': dt.datetime.fromtimestamp(ts).strftime('%H:%M'),
+              'zone': dt.datetime.fromtimestamp(ts).astimezone().strftime('%Z'),
+              'tokens': 0, 'providers': {}}
+             for ts in range(start, end + 1, 3600)]
+    providers = {}
+    available_providers = [row[0] for row in ledger.db.execute('SELECT DISTINCT provider FROM events')]
+    total = timed = unplaced = 0
+    ledger.db.row_factory = sqlite3.Row
+    for row in ledger.db.execute('SELECT provider,client,timePrecision,ts,input,output,cacheRead,cacheWrite '
+                                 'FROM events WHERE ts>=? AND ts<=?', (start, end)):
+        r = dict(row)
+        tokens = sum(number(r[f]) for f in FIELDS[:4])
+        p = providers.setdefault(r['provider'], {'tokens': 0, 'timedTokens': 0, 'unplacedTokens': 0})
+        total += tokens
+        p['tokens'] += tokens
+        if not timed_event(r):
+            unplaced += tokens
+            p['unplacedTokens'] += tokens
+            continue
+        index = int((r['ts'] - start) // 3600)
+        if 0 <= index < len(hours):
+            timed += tokens
+            p['timedTokens'] += tokens
+            hours[index]['tokens'] += tokens
+            by_provider = hours[index]['providers']
+            by_provider[r['provider']] = by_provider.get(r['provider'], 0) + tokens
+    return {'schemaVersion': 1, 'date': str(day), 'generatedAt': now.timestamp(),
+            'timeZone': now.tzname() or '', 'utcOffsetMinutes': int(now.utcoffset().total_seconds() // 60),
+            'tokens': total, 'timedTokens': timed, 'unplacedTokens': unplaced,
+            'availableProviders': available_providers, 'providers': providers, 'hours': hours}
+
+
 def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
     selection = selection or {}
     # Sources left out of this view. They are dropped before anything is
@@ -1726,26 +1856,37 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
     excluded_sources = {str(name) for name in (selection.get('excludeSource') or []) if name}
     today = now or dt.datetime.now().astimezone()
     start_date = today.date() - dt.timedelta(days=days - 1)
+    selected_hour = int(selection['hourStart']) if selection.get('hourStart') else None
+    selected_date = dt.date.fromisoformat(selection['day']) if selection.get('day') else (dt.datetime.fromtimestamp(selected_hour).date() if selected_hour is not None else None)
     # Local calendar boundaries, including DST transitions.
     start = dt.datetime.combine(start_date, dt.time()).timestamp()
-    previous_start = dt.datetime.combine(start_date - dt.timedelta(days=days), dt.time()).timestamp()
+    previous_date = (selected_date - dt.timedelta(days=1)) if selected_date else None
+    previous_start = dt.datetime.combine(previous_date if previous_date else start_date - dt.timedelta(days=days), dt.time()).timestamp()
     end = today.timestamp()
-    previous_end = (dt.datetime.combine(today.date() - dt.timedelta(days=1), today.time().replace(tzinfo=None)).timestamp()
+    previous_end = (dt.datetime.combine(previous_date, today.time().replace(tzinfo=None)).timestamp()
+                    if selected_date == today.date() else
+                    dt.datetime.combine(selected_date, dt.time()).timestamp() if selected_date else
+                    dt.datetime.combine(today.date() - dt.timedelta(days=1), today.time().replace(tzinfo=None)).timestamp()
                     if days == 1 else start)
     summary, previous = bucket(), bucket()
+    hourly_unplaced = bucket()
+    unplaced_providers = {}
     providers = {p: bucket() for p in cfg['enabled']}
-    daily = {str(start_date + dt.timedelta(days=n)): {'providers': {p: bucket() for p in providers}, 'cards': {}} for n in range(days)}
+    daily = {str(start_date + dt.timedelta(days=n)): {'total': bucket(), 'providers': {p: bucket() for p in providers}, 'cards': {}} for n in range(days)}
     hour_start, hour_end = start, end
-    if selection.get('day'):
-        selected_date = dt.date.fromisoformat(selection['day'])
+    if selected_date:
         hour_start = dt.datetime.combine(selected_date, dt.time()).timestamp()
         hour_end = min(end, dt.datetime.combine(selected_date + dt.timedelta(days=1), dt.time()).timestamp() - 1)
+    if selected_hour is not None:
+        hour_start = selected_hour
+        hour_end = min(end, selected_hour + 3599)
     hourly = [{'start': ts, 'label': dt.datetime.fromtimestamp(ts).strftime('%H:%M'),
                'title': dt.datetime.fromtimestamp(ts).astimezone().strftime('%H:%M %Z') + ' to ' +
                         (dt.datetime.fromtimestamp(ts + 3600).astimezone().strftime('%H:%M %Z') if ts + 3600 <= hour_end + 1 else 'now'),
-               'providers': {p: bucket() for p in providers}, 'cards': {}}
-              for ts in range(int(hour_start), int(hour_end) + 1, 3600)] if days == 1 or selection.get('day') else []
+               'total': bucket(), 'providers': {p: bucket() for p in providers}, 'cards': {}}
+              for ts in range(int(hour_start), int(hour_end) + 1, 3600)] if hour_end >= hour_start and (days == 1 or selected_date or selected_hour is not None) else []
     models, projects, clients, sessions, routes, accounts = {}, {}, {}, {}, {}, {}
+    card_models_agg = {}
     model_routes = {}
     unpriced = {}
     # The model filter's own options: every model this scope recorded in the
@@ -1756,11 +1897,22 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
     labels, assignments = account_assignments(ledger, cfg)
     provider_accounts = {p: set() for p in providers}
     heatmap = collections.Counter()
+    heatmap_fast = provider == 'all' and not excluded_sources and not any(
+        selection.get(key) for key in ('model', 'project', 'client', 'apiProvider', 'day', 'hourStart', 'account'))
     unknown = set()
     rates = load_rates()
     ledger.db.row_factory = sqlite3.Row
     earliest = ledger.db.execute('SELECT MIN(ts) FROM events').fetchone()[0]
-    for row in ledger.db.execute('SELECT * FROM events WHERE ts>=? AND ts<=?', (min(previous_start, end - 365 * 86400), end)):
+    if heatmap_fast and providers:
+        names = tuple(providers)
+        placeholders = ','.join('?' for _ in names)
+        for day, tokens in ledger.db.execute(
+                f"SELECT date(ts,'unixepoch','localtime'),SUM(input+output+cacheRead+cacheWrite) "
+                f"FROM events WHERE ts>=? AND ts<=? AND provider IN ({placeholders}) GROUP BY 1",
+                (end - 365 * 86400, end, *names)):
+            heatmap[day] = tokens or 0
+    scan_start = previous_start if heatmap_fast or selected_date else min(previous_start, end - 365 * 86400)
+    for row in ledger.db.execute('SELECT * FROM events WHERE ts>=? AND ts<=?', (scan_start, end)):
         r = dict(row); p = r['provider']
         account = assignments.get(r['id'], 'unassigned')
         if selection.get('account') and account != selection['account']: continue
@@ -1771,50 +1923,83 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
         # what this scope holds rather than what is currently being looked at.
         # The period, a chosen day, the route tab, and the account filter all
         # still apply, since those decide which history is in view at all.
-        if start <= r['ts'] <= end and (not selection.get('day') or day == selection['day']):
+        if start <= r['ts'] <= end and (not selected_date or day == str(selected_date)) and (selected_hour is None or selected_hour <= r['ts'] < selected_hour + 3600):
             family_name = model_family(r['model'])
             model_options[family_name] = model_options.get(family_name, 0) + sum(r[f] for f in FIELDS[:4])
         if not selected(r, selection, p): continue
-        if selection.get('day') and day != selection['day']: continue
-        heatmap[day] += sum(r[f] for f in FIELDS[:4])
-        if r['ts'] < previous_start: continue
+        if selected_hour is None and previous_start <= r['ts'] < previous_end and (not previous_date or day == str(previous_date)):
+            value, savings = price(r, rates['document'])
+            add(previous, r, value, savings)
+        if selected_date and day != str(selected_date): continue
+        if selected_hour is not None and (not timed_event(r) or not selected_hour <= r['ts'] < selected_hour + 3600): continue
+        if not heatmap_fast: heatmap[day] += sum(r[f] for f in FIELDS[:4])
         value, savings = price(r, rates['document'])
-        if r['ts'] < start:
-            if r['ts'] <= previous_end: add(previous, r, value, savings)
-            continue
+        if r['ts'] < start: continue
         add(summary, r, value, savings); add(providers[p], r, value, savings)
         provider_accounts[p].add(account)
         card_id = p + ':' + account
+        model_entry = card_models_agg.setdefault(card_id, {}).setdefault(r['model'],
+            {'model': r['model'], 'tokens': 0, 'value': 0.0, 'unpriced': 0})
+        model_tokens = sum(r[f] for f in FIELDS[:4])
+        model_entry['tokens'] += model_tokens
+        if value is None: model_entry['unpriced'] += model_tokens
+        else: model_entry['value'] += value
         if day in daily:
+            add(daily[day]['total'], r, value, savings)
             add(daily[day]['providers'][p], r, value, savings)
-            add(daily[day]['cards'].setdefault(card_id, bucket()), r, value, savings)
+            card_bucket = daily[day]['cards'].get(card_id)
+            if card_bucket is None:
+                card_bucket = daily[day]['cards'][card_id] = bucket()
+            add(card_bucket, r, value, savings)
         if hourly:
             index = int((r['ts'] - hour_start) // 3600)
-            if 0 <= index < len(hourly):
+            if not timed_event(r):
+                add(hourly_unplaced, r, value, savings)
+                unplaced_bucket = unplaced_providers.get(p)
+                if unplaced_bucket is None:
+                    unplaced_bucket = unplaced_providers[p] = bucket()
+                add(unplaced_bucket, r, value, savings)
+            elif 0 <= index < len(hourly):
+                add(hourly[index]['total'], r, value, savings)
                 add(hourly[index]['providers'][p], r, value, savings)
-                add(hourly[index]['cards'].setdefault(card_id, bucket()), r, value, savings)
+                card_bucket = hourly[index]['cards'].get(card_id)
+                if card_bucket is None:
+                    card_bucket = hourly[index]['cards'][card_id] = bucket()
+                add(card_bucket, r, value, savings)
         if value is None:
             # Pricing coverage stays keyed by route and by the exact recorded
             # spelling, because that pair is what names the rate table that has
             # not caught up. Grouping it under one model name would blame the
             # wrong route for an unpriced token.
             unknown.add(r['model'])
-            add(unpriced.setdefault((p, r['model']), bucket()), r, value, savings)
+            missing_key = (p, r['model'])
+            missing_bucket = unpriced.get(missing_key)
+            if missing_bucket is None:
+                missing_bucket = unpriced[missing_key] = bucket()
+            add(missing_bucket, r, value, savings)
         # The Models breakdown is keyed by family rather than by provider, so one
         # model is one row across routes, and it keeps its own per-route detail.
         # Every route's value is still priced by that route's own rate table in
         # price() above, so grouping sums real figures instead of re-pricing one
         # route's tokens at another route's rates.
         family = model_family(r['model'])
-        add(models.setdefault(family, bucket()), r, value, savings)
-        route = model_routes.setdefault(family, {}).setdefault(p, {'models': set(), 'bucket': bucket()})
+        model_bucket = models.get(family)
+        if model_bucket is None:
+            model_bucket = models[family] = bucket()
+        add(model_bucket, r, value, savings)
+        family_routes = model_routes.setdefault(family, {})
+        route = family_routes.get(p)
+        if route is None:
+            route = family_routes[p] = {'models': set(), 'bucket': bucket()}
         route['models'].add(r['model'])
         add(route['bucket'], r, value, savings)
         # Every other breakdown stays keyed by provider, as it always was.
         for group, key in [(projects, (p, r['project'] or 'Unknown project')),
                            (clients, (p, r['client'])), (sessions, (p, r['session'])),
                            (routes, (p, r.get('apiProvider') or p)), (accounts, (p, account))]:
-            b = group.setdefault(key, bucket())
+            b = group.get(key)
+            if b is None:
+                b = group[key] = bucket()
             add(b, r, value, savings)
             if group is sessions:
                 b['project'] = r['project'] or 'Unknown project'
@@ -1880,6 +2065,7 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
             if selection.get('account') and assignments.get(r['id'], 'unassigned') != selection['account']: continue
             if not selected(r, selection, 'opencode-go'): continue
             if selection.get('day') and str(dt.datetime.fromtimestamp(r['ts']).date()) != selection['day']: continue
+            if selected_hour is not None and (not timed_event(r) or not selected_hour <= r['ts'] < selected_hour + 3600): continue
             rate = rates['document'].get('opencode-go/' + r['model']) or rates['document'].get(r['model'])
             if not isinstance(rate, dict) or not isinstance(rate.get('monthly_limit_usd'), (int, float)): continue
             entry = used.setdefault(r['model'], [rate, 0.0])
@@ -1894,23 +2080,9 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
     # bar, so the local token totals are the only per-model view available.
     # Each card is scoped exactly as the card itself is: by account, and by the
     # same selection the report was asked for.
-    card_models = {}
     for card in cards:
-        rows_for_card = {}
-        for row in ledger.db.execute(
-                'SELECT * FROM events WHERE provider=? AND ts>=? AND ts<=?', (card['provider'], start, end)):
-            r = dict(row)
-            if assignments.get(r['id'], 'unassigned') != card['accountId']: continue
-            if not selected(r, selection, card['provider']): continue
-            if selection.get('day') and str(dt.datetime.fromtimestamp(r['ts']).date()) != selection['day']: continue
-            value = price(r, rates['document'])[0]
-            entry = rows_for_card.setdefault(r['model'], {'model': r['model'], 'tokens': 0, 'value': 0.0, 'unpriced': 0})
-            total = sum(r[f] for f in FIELDS[:4])
-            entry['tokens'] += total
-            if value is None: entry['unpriced'] += total
-            else: entry['value'] += value
-        card_models[card['id']] = sorted(rows_for_card.values(), key=lambda item: item['tokens'], reverse=True)[:4]
-    for card in cards: card['models'] = card_models.get(card['id'], [])
+        card['models'] = sorted(card_models_agg.get(card['id'], {}).values(),
+                                key=lambda item: item['tokens'], reverse=True)[:4]
     # The Models table: one row per model, carrying the routes that served it.
     # A grouped row's value is the sum of what each route charged its own tokens
     # at, so it is the real total and not one route's rates applied to another's
@@ -1941,10 +2113,12 @@ def report(ledger, cfg, days=7, provider='all', now=None, selection=None):
                                       'valueShare': 100 * b['value'] / summary['value'] if summary['value'] else None,
                                       'monthlyPrice': cfg['monthlyPrices'].get(p) if provider_accounts[p] <= {'local'} else None}
                           for p, b in providers.items() if provider == 'all' or p == provider],
-            'daily': [{'date': day, 'providers': {p: finish(b) for p, b in values['providers'].items()},
+            'daily': [{'date': day, 'total': finish(values['total']), 'providers': {p: finish(b) for p, b in values['providers'].items()},
                        'cards': {card_id: finish(b) for card_id, b in values['cards'].items()}} for day, values in daily.items()],
-            'hourly': [h | {'providers': {p: finish(b) for p, b in h['providers'].items()},
+            'hourly': [h | {'total': finish(h['total']), 'providers': {p: finish(b) for p, b in h['providers'].items()},
                             'cards': {card_id: finish(b) for card_id, b in h['cards'].items()}} for h in hourly],
+            'hourlyUnplaced': {'total': finish(hourly_unplaced),
+                               'providers': {p: finish(b) for p, b in unplaced_providers.items()}},
             'routes': rows(routes), 'models': model_rows, 'projects': rows(projects), 'clients': rows(clients), 'sessions': rows(sessions),
             'heatmap': dict(heatmap), 'unknownModels': sorted(unknown), 'coverage': coverage | {'earliest': earliest},
             'pricing': {'source': rates['source'], 'fetchedAtMs': rates.get('fetchedAtMs'),
@@ -1986,19 +2160,28 @@ def write_agent_record(ledger, provider):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['report', 'scan', 'go', 'settings', 'theme'])
+    parser.add_argument('action', choices=['report', 'scan', 'pulse', 'go', 'settings', 'theme', 'pin'])
     parser.add_argument('--days', type=int, choices=[1, 7, 30, 90, 365], default=7)
     parser.add_argument('--provider', choices=['all', *PROVIDERS], default='all')
     for field in ('model', 'project', 'client', 'apiProvider', 'day', 'account'): parser.add_argument('--' + field)
+    parser.add_argument('--hourStart', type=int)
     # A source (provider) can be left out of a view without turning it off in
     # settings: repeat the flag once per source to exclude.
     parser.add_argument('--excludeSource', action='append', default=[])
     parser.add_argument('--save', nargs='?', const=''); parser.add_argument('--force', action='store_true')
+    parser.add_argument('--pin-provider', default=''); parser.add_argument('--pin-label', default='')
+    parser.add_argument('--pin-title', default='')
+    parser.add_argument('--pin-remove', action='store_true')
     args = parser.parse_args()
     # Theme reads stay out of the ledger path so a theme swap can repaint
     # without waiting on a history scan.
     if args.action == 'theme':
         print(json.dumps(theme())); return
+    if args.action == 'pin':
+        try: print(json.dumps(save_pinned_limit(args.pin_provider, args.pin_label, args.pin_title, args.pin_remove)))
+        except ValueError as error:
+            print(json.dumps({'error': str(error)})); raise SystemExit(1)
+        return
     if args.action == 'report':
         ledger = Ledger(STATE / 'usage.sqlite', readonly=True)
         try:
@@ -2006,7 +2189,7 @@ def main():
             if not CONFIG.exists():
                 found = {r[0] for r in ledger.db.execute('SELECT DISTINCT provider FROM events')}
                 cfg = cfg | {'enabled': [p for p in PROVIDERS if p in found] or cfg['enabled']}
-            print(json.dumps(report(ledger, cfg, args.days, args.provider, selection={k: getattr(args, k) for k in ('model', 'project', 'client', 'apiProvider', 'day', 'account', 'excludeSource') if getattr(args, k)})))
+            print(json.dumps(report(ledger, cfg, args.days, args.provider, selection={k: getattr(args, k) for k in ('model', 'project', 'client', 'apiProvider', 'day', 'account', 'hourStart', 'excludeSource') if getattr(args, k)})))
         finally: ledger.db.close()
         return
     STATE.mkdir(parents=True, exist_ok=True)
@@ -2042,12 +2225,22 @@ def main():
             cfg = cfg | {'enabled': list(dict.fromkeys(cfg['enabled'] + [p for p in PROVIDERS if p in found]))}
         if args.action == 'scan':
             ledger.scan(cfg, force=args.force)
+            atomic_json(STATE / 'hourly-summary.json', hourly_snapshot(ledger))
             if not CONFIG.exists():
                 found = {r[0] for r in ledger.db.execute('SELECT DISTINCT provider FROM events')}
                 cfg = cfg | {'enabled': list(dict.fromkeys(cfg['enabled'] + [p for p in PROVIDERS if p in found]))}
+        if args.action == 'pulse':
+            # The live counter has a local, bounded path. It never checks
+            # provider limits, fetches Cursor usage, or copies a synced ledger.
+            ledger.scan(cfg, local_only=True)
+            snapshot = hourly_snapshot(ledger)
+            atomic_json(STATE / 'hourly-summary.json', snapshot)
+            print(json.dumps(snapshot))
         if args.action in ('go', 'scan') and os.getenv('AI_USAGE_DEMO') != '1':
             go_quota(args.force)
-            if args.action == 'go': ledger.scan(cfg)
+            if args.action == 'go':
+                ledger.scan(cfg)
+                atomic_json(STATE / 'hourly-summary.json', hourly_snapshot(ledger))
             write_agent_record(ledger, 'opencode-go')
             if args.action == 'scan' and 'grok' in cfg['enabled']:
                 grok_quota(args.force)

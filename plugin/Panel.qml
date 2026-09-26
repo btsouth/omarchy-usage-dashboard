@@ -18,6 +18,95 @@ Panel {
   readonly property color surface: Color.popups.background
   readonly property color track: Style.selectedFillFor(foreground, Color.accent)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+  // Read the live shell configuration through the bar, so cycling the clock
+  // format updates this panel without restarting it.
+  readonly property string clockPattern: barClockPattern(bar && bar.shell ? bar.shell.shellConfig : null)
+  readonly property bool clockUses24Hour: !/[Aa]/.test(clockPattern.replace(/'[^']*'/g, ""))
+  readonly property string shortTimePattern: clockUses24Hour ? "HH:mm" : "h:mm AP"
+  readonly property string pinPath: (Quickshell.env("XDG_CONFIG_HOME") || Quickshell.env("HOME") + "/.config")
+    + "/omarchy/ai-usage/pinned-limit.json"
+  property var pinnedLimits: []
+  property var pendingPins: []
+  property string pinError: ""
+
+  FileView {
+    id: pinFile
+    path: root.pinPath
+    watchChanges: true
+    atomicWrites: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: {
+      try {
+        var value = JSON.parse(text())
+        root.pinnedLimits = root.readPins(value)
+      } catch (e) { root.pinnedLimits = [] }
+    }
+    onLoadFailed: root.pinnedLimits = []
+  }
+
+  Process {
+    id: pinProcess
+    running: false
+    onExited: function(code) {
+      if (code !== 0) root.pinError = "Could not save pinned limit"
+      pinFile.reload()
+      if (root.pendingPins.length > 0) {
+        var next = root.pendingPins.shift()
+        root.savePin(next.pin, next.remove)
+      }
+    }
+  }
+
+  function readPins(value) {
+    var entries = value && Array.isArray(value.pins) ? value.pins : [value]
+    return entries.filter(function(pin) {
+      return pin && typeof pin.provider === "string" && /^[a-z0-9][a-z0-9-]{0,79}$/.test(pin.provider)
+        && typeof pin.label === "string" && pin.label.length > 0
+        && (pin.title === undefined || typeof pin.title === "string")
+    }).map(function(pin) {
+      return {provider: pin.provider, label: pin.label, title: pin.title || ""}
+    }).slice(0, 3)
+  }
+
+  function savePin(pin, remove) {
+    if (pinProcess.running) { pendingPins.push({pin: pin, remove: remove}); return }
+    pinError = ""
+    var command = ["python3", (Quickshell.env("AI_USAGE_ROOT") || Quickshell.env("HOME")
+      + "/.local/share/omarchy-usage-dashboard/app") + "/collector.py", "pin",
+      "--pin-provider", pin.provider, "--pin-label", pin.label, "--pin-title", pin.title]
+    if (remove) command.push("--pin-remove")
+    pinProcess.command = command
+    pinProcess.running = true
+  }
+
+  function isPinned(providerId, label, title) {
+    return pinnedLimits.some(function(pin) {
+      return pin.provider === providerId && pin.label === label && pin.title === title
+    })
+  }
+
+  function togglePin(providerId, window) {
+    if (!window) return
+    var remove = isPinned(providerId, window.label, window.title)
+    if (!remove && pinnedLimits.length >= 3) { pinError = "Three pins maximum · unpin one first"; return }
+    savePin({provider: providerId, label: window.label, title: window.title}, remove)
+  }
+
+  function barClockPattern(config) {
+    var barConfig = config && config.bar ? config.bar : {}
+    var layout = barConfig.layout || {}
+    var vertical = barConfig.position === "left" || barConfig.position === "right"
+    for (var side of ["left", "center", "right"]) {
+      var entries = layout[side] || []
+      for (var i = 0; i < entries.length; i++) {
+        if (!entries[i] || entries[i].id !== "omarchy.clock") continue
+        return String(vertical ? (entries[i].verticalFormat || "HH\nmm")
+                               : (entries[i].format || "dddd HH:mm"))
+      }
+    }
+    return Qt.locale().timeFormat(Locale.ShortFormat)
+  }
 
   // A scrollbar that leaves no groove behind: only a short thumb, no track.
   // The default control paints its groove over the text it scrolls, which is
@@ -27,8 +116,11 @@ Panel {
   component QuietScrollBar: ScrollBar {
     id: quiet
     policy: ScrollBar.AsNeeded
-    padding: 0
-    implicitWidth: Style.space(6)
+    leftPadding: Style.space(4)
+    rightPadding: Style.space(4)
+    topPadding: 0
+    bottomPadding: 0
+    implicitWidth: Style.space(12)
     background: Item {}
     contentItem: Rectangle {
       implicitWidth: Style.space(4)
@@ -46,13 +138,20 @@ Panel {
   // The selection follows the provider, not the slot it happens to sit in: a
   // provider whose first scan lands while the panel is open would otherwise
   // shift the list underneath you and swap out what you were reading.
-  property string selectedProviderId: ""
+  property string selectedProviderId: "all"
+  onProvidersChanged: {
+    if (selectedProviderId !== "all" && providers.length > 0
+        && !providers.some(function(p) { return p.providerId === selectedProviderId }))
+      selectedProviderId = "all"
+  }
+  readonly property bool allSelected: selectedProviderId === "all"
   readonly property int providerIndex: {
+    if (allSelected) return -1
     for (var i = 0; i < providers.length; i++)
       if (providers[i].providerId === selectedProviderId) return i
-    return 0
+    return -1
   }
-  readonly property var provider: providers.length > 0 ? providers[providerIndex] : null
+  readonly property var provider: providerIndex >= 0 ? providers[providerIndex] : null
 
   property bool cursorActive: false
 
@@ -80,15 +179,129 @@ Panel {
   // last 10% of the funded credits lights the same alarm.
   readonly property bool balanceAlarming: !!balance && balance.funded > 0
     && balance.remaining / balance.funded <= 0.1
-  readonly property bool alarming: (!!headline && headline.percent >= 0.9) || balanceAlarming
+  readonly property bool alarming: allSelected
+    ? providers.some(function(p) { var w = bindingWindow(p); return !!w && w.percent >= 0.9 })
+    : (!!headline && headline.percent >= 0.9) || balanceAlarming
 
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
   function alpha(c, a) { return Qt.rgba(c.r, c.g, c.b, a) }
 
   function selectProvider(index) {
     if (providers.length === 0) return
-    var wrapped = ((index % providers.length) + providers.length) % providers.length
-    selectedProviderId = providers[wrapped].providerId
+    var length = providers.length + 1
+    var wrapped = (((index + 1) % length) + length) % length - 1
+    selectedProviderId = wrapped < 0 ? "all" : providers[wrapped].providerId
+  }
+
+  function hourlyData() {
+    var data = usage.hourlySummary
+    return data && data.date === todayDate() && data.schemaVersion === 1
+      && Number(data.utcOffsetMinutes) === -new Date(root.nowMs).getTimezoneOffset() ? data : null
+  }
+
+  function hourlyIds() {
+    if (!allSelected) return provider ? [provider.providerId] : []
+    return providers.map(function(p) { return p.providerId })
+  }
+
+  function hourlyMissingIds() {
+    var data = hourlyData()
+    if (!data) return []
+    return hourlyIds().filter(function(id) { return (data.availableProviders || []).indexOf(id) < 0 })
+  }
+
+  function hourlyAvailable() {
+    var data = hourlyData()
+    return !!data && hourlyIds().some(function(id) { return (data.availableProviders || []).indexOf(id) >= 0 })
+  }
+
+  function hourlyTotal(field) {
+    var data = hourlyData()
+    if (!data) return 0
+    var ids = hourlyIds(), sum = 0
+    for (var i = 0; i < ids.length; i++) sum += Number((data.providers[ids[i]] || {})[field] || 0)
+    return sum
+  }
+
+  function hourRows() {
+    var data = hourlyData()
+    if (!data || !hourlyAvailable()) return []
+    var ids = hourlyIds()
+    return data.hours.slice(-6).reverse().map(function(hour) {
+      var value = 0
+      for (var i = 0; i < ids.length; i++) value += Number((hour.providers || {})[ids[i]] || 0)
+      var repeated = data.hours.some(function(other) { return other.start !== hour.start && other.label === hour.label })
+      var label = Qt.formatDateTime(new Date(Number(hour.start) * 1000), root.shortTimePattern)
+      return { label: repeated ? label + " " + hour.zone : label, start: hour.start, tokens: value }
+    })
+  }
+
+  function hourPeak() {
+    var rows = hourRows(), peak = 1
+    for (var i = 0; i < rows.length; i++) peak = Math.max(peak, rows[i].tokens)
+    return peak
+  }
+
+  function allLimitRows() {
+    var rows = []
+    for (var i = 0; i < providers.length; i++) {
+      var window = bindingWindow(providers[i])
+      if (window && !isPinned(providers[i].providerId, window.label, window.title)) rows.push({id: providers[i].providerId, name: providers[i].providerName,
+                             label: window.label, title: window.title, percent: window.percent,
+                             resetAt: window.resetAt, stale: providers[i].limitsStale === true})
+    }
+    rows.sort(function(a, b) {
+      if (a.stale !== b.stale) return a.stale ? 1 : -1
+      return b.percent - a.percent
+    })
+    return rows.slice(0, 3)
+  }
+
+  function pinnedProvider(pin) {
+    if (!pin) return null
+    return providers.find(function(p) { return p.providerId === pin.provider }) || null
+  }
+
+  function pinnedWindow(pin) {
+    var p = pinnedProvider(pin)
+    if (!p) return null
+    var windows = limitWindows(p)
+    var exact = windows.find(function(w) { return w.label === pin.label && w.title === pin.title })
+    if (exact) return exact
+    var sameLabel = windows.filter(function(w) { return w.label === pin.label })
+    return sameLabel.length === 1 ? sameLabel[0] : null
+  }
+
+  function pinnedProviderName(pin) {
+    if (!pin) return ""
+    if (pin.provider === "codex") return "ChatGPT Main"
+    if (pin.provider === "codex-second") return "ChatGPT Second"
+    var p = pinnedProvider(pin)
+    return p ? p.providerName : pin.provider
+  }
+
+  function limitSourceName(id, fallback) {
+    if (id === "codex") return "ChatGPT Main"
+    if (id === "codex-second") return "ChatGPT Second"
+    return fallback || id
+  }
+
+  // Provider timestamps can carry microseconds or nanoseconds. QML's Date
+  // parser accepts milliseconds reliably, so trim only the excess precision.
+  function resetDate(window) {
+    if (!window || !window.resetAt) return null
+    var date = new Date(String(window.resetAt).replace(/(\.\d{3})\d+/, "$1"))
+    return isFinite(date.getTime()) ? date : null
+  }
+
+  function resetDescription(window) {
+    if (!window.resetAt) return "Reset time not reported"
+    var date = resetDate(window)
+    if (!date) return "Reset time unavailable"
+    var remaining = resetMsFor(window)
+    if (remaining > 0) return "Resets in " + formatDuration(remaining)
+      + " · " + Qt.formatDateTime(date, "ddd " + shortTimePattern)
+    return "Reset time passed · awaiting update"
   }
 
   function refreshNow() {
@@ -158,6 +371,7 @@ Panel {
   // as a one-minute window.
   function limitWindow(label, percent, resetAt, title) {
     return {
+      label: String(label || ""),
       title: String(title || "") !== "" ? String(title) : windowTitle(label),
       percent: Number(percent),
       resetAt: String(resetAt || "")
@@ -182,15 +396,17 @@ Panel {
     var windows = limitWindows(p)
     var best = null
     for (var i = 0; i < windows.length; i++) {
+      // A provider can leave a full window in its last saved record after
+      // the advertised reset. That is no longer a live quota warning.
+      if (resetDate(windows[i]) && resetMsFor(windows[i]) <= 0) continue
       if (!best || windows[i].percent > best.percent) best = windows[i]
     }
     return best
   }
 
   function resetMsFor(w) {
-    if (!w || w.resetAt === "") return -1
-    var ms = new Date(w.resetAt).getTime()
-    return isFinite(ms) ? ms - root.nowMs : -1
+    var date = resetDate(w)
+    return date ? date.getTime() - root.nowMs : -1
   }
 
   function formatDuration(ms) {
@@ -384,6 +600,7 @@ Panel {
     nowMs = Date.now()
     if (panelFlick) panelFlick.contentY = 0
     usage.refreshLimits()
+    usage.refreshPulse()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
@@ -399,6 +616,13 @@ Panel {
     running: root.opened
     repeat: true
     onTriggered: root.nowMs = Date.now()
+  }
+
+  Timer {
+    interval: 15000
+    running: root.opened
+    repeat: true
+    onTriggered: usage.refreshPulse()
   }
 
   IpcHandler {
@@ -432,21 +656,15 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    // The chips settle the panel width. Measured against the real Button and Style
-    // tokens (JetBrainsMono Nerd Font at 10px, 9px side padding): five chips need
-    // 425, six need 511. The fixed 460 left six chips 63px short, and a squeezed
-    // row clips its labels because they do not elide. Following the row's own
-    // width is the exact answer as providers are added, and fittedContentWidth
-    // clamps to the screen, so it can never overflow.
-    contentWidth: panel.fittedContentWidth(Math.max(Style.space(460),
-                                                    (providerSwitch ? providerSwitch.implicitWidth : 0) + panel.padding * 2 + Style.space(28)))
-    // Taller than the control panels on purpose: this one is a dashboard, and
-    // the whole point is reading limits and history without scrolling.
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(640))
+    contentWidth: panel.fittedContentWidth(Style.space(460))
+    // Use the available screen height for the limits; fittedContentHeight
+    // still keeps the card clear of the bar and screen edges.
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(900))
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: providerSwitch.popupOpen
 
       onMoveRequested: function(dx, dy) {
         if (dx !== 0) {
@@ -474,24 +692,67 @@ Panel {
         flickableDirection: Flickable.VerticalFlick
         interactive: contentHeight > height
 
+        // The attached control moves the Flickable when dragged. Keep it
+        // outside the clipped content while retaining that connection.
+        ScrollBar.vertical: QuietScrollBar {
+          id: panelScroll
+          parent: keyCatcher
+          x: panelFlick.x + panelFlick.width + Style.space(1)
+          y: panelFlick.y
+          height: panelFlick.height
+          interactive: true
+        }
+
         Column {
           id: column
           width: panelFlick.width
           spacing: Style.space(12)
 
-          Button {
-            id: analyticsButton
+          RowLayout {
+            id: headerControls
             width: parent.width
-            text: "Open analytics  ↗"
-            Accessible.name: "Open AI usage analytics"
-            selected: true
-            focusable: true
-            foreground: root.foreground
-            fontFamily: root.fontFamily
-            verticalPadding: Style.space(12)
-            onClicked: {
-              Quickshell.execDetached([Quickshell.env("HOME") + "/.local/bin/omarchy-usage-dashboard"])
-              root.close()
+            spacing: Style.space(8)
+
+            SourceDropdown {
+              id: providerSwitch
+              visible: root.providers.length > 1
+              // Inset the picker so its full outline stays inside the clip.
+              Layout.leftMargin: Style.space(3)
+              Layout.fillWidth: true
+              Layout.minimumWidth: Style.space(120)
+              label: "SOURCE"
+              showLabel: false
+              rowHeight: Style.space(42)
+              value: root.selectedProviderId
+              options: [{value: "all", label: "All sources"}].concat(root.providers.map(function(p) {
+                return {value: p.providerId, label: ({"codex": "Main", "codex-second": "Second", "claude-second": "Claude 2", "claude-third": "Claude 3", "opencode-go": "OpenCode Go"})[p.providerId] || p.providerName}
+              }))
+              foreground: root.foreground
+              background: root.surface
+              fontFamily: root.fontFamily
+              onChanged: function(value) { root.selectedProviderId = value }
+              Connections {
+                target: root
+                function onSelectedProviderIdChanged() { providerSwitch.value = root.selectedProviderId }
+              }
+            }
+
+            Button {
+              id: analyticsButton
+              Layout.preferredWidth: implicitWidth
+              Layout.fillWidth: !providerSwitch.visible
+              Layout.rightMargin: Style.space(3)
+              text: "Analytics ↗"
+              Accessible.name: "Open Agent Pulse analytics"
+              selected: true
+              focusable: true
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              verticalPadding: Style.space(10)
+              onClicked: {
+                Quickshell.execDetached([Quickshell.env("HOME") + "/.local/bin/omarchy-usage-dashboard"])
+                root.close()
+              }
             }
           }
 
@@ -547,6 +808,125 @@ Panel {
             }
           }
 
+          Column {
+            visible: root.allSelected && root.providers.length > 0
+            width: parent.width
+            spacing: Style.spacing.sm
+            Text {
+              width: parent.width
+              text: "Agent Pulse"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.display
+              font.bold: true
+            }
+            AnimatedTokenCount {
+              width: parent.width
+              dataReady: root.hourlyAvailable()
+              visible: dataReady
+              targetTokens: root.hourlyTotal("tokens")
+              scopeKey: (root.allSelected ? "all" : "other") + "|" + root.todayDate()
+              animateChanges: root.opened && root.allSelected
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.display + 8
+              font.bold: true
+            }
+            Text {
+              width: parent.width
+              text: root.hourlyAvailable() ? "Processed tokens today · updates as agents record usage"
+                                           : "Reading local token history"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+          }
+
+          Column {
+            id: pinnedSection
+            visible: root.allSelected && root.pinnedLimits.length > 0
+            width: parent.width
+            spacing: Style.space(8)
+
+            RowLayout {
+              width: parent.width
+              PanelSectionHeader {
+                text: root.pinnedLimits.length === 1 ? "PINNED LIMIT" : "PINNED LIMITS"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                Layout.fillWidth: true
+              }
+              Text {
+                text: root.pinnedLimits.length + "/3"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+            Repeater {
+              model: root.pinnedLimits
+              Column {
+                required property var modelData
+                readonly property var limit: root.pinnedWindow(modelData)
+                readonly property var source: root.pinnedProvider(modelData)
+                width: pinnedSection.width
+                spacing: Style.space(3)
+                RowLayout {
+                  width: parent.width
+                  Text {
+                    text: root.pinnedProviderName(modelData) + " · " + (limit ? limit.title : modelData.title || root.windowTitle(modelData.label))
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: true
+                    elide: Text.ElideRight
+                    Layout.fillWidth: true
+                  }
+                  Text {
+                    text: limit ? Math.round(limit.percent * 100) + "%" : "—"
+                    color: limit && limit.percent >= 0.9 ? root.urgent : root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                  Button {
+                    text: "Unpin"
+                    foreground: root.dim
+                    fontFamily: root.fontFamily
+                    fontSize: Style.font.caption
+                    focusable: true
+                    Accessible.name: "Unpin " + root.pinnedProviderName(modelData) + " " + modelData.title + " limit"
+                    onClicked: root.savePin(modelData, true)
+                  }
+                }
+                Meter {
+                  visible: !!limit
+                  width: parent.width
+                  value: limit ? limit.percent : -1
+                  alarming: !!limit && limit.percent >= 0.9
+                }
+                Text {
+                  width: parent.width
+                  text: limit ? (source && source.limitsStale ? "Last known · " : "")
+                    + root.resetDescription(limit) : "Waiting for this limit's next update"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap
+                }
+              }
+            }
+          }
+
+          Text {
+            visible: root.pinError !== ""
+            width: parent.width
+            text: root.pinError
+            color: root.urgent
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
           Text {
             visible: root.providers.length === 0
             width: parent.width
@@ -559,44 +939,76 @@ Panel {
             wrapMode: Text.WordWrap
           }
 
-          // ---------- Provider switch ----------
-          // One row, chips sharing the width evenly: a provider switch is a
-          // segmented control, so equal room on both sides reads as one
-          // control rather than a left-packed list with dead space beside it.
-          // Layout.fillWidth lets each chip keep its own text width as the
-          // ratio while the row absorbs the remainder, so a short label is
-          // never padded into a pill of its own. Labels are shortened because
-          // full provider names ("Ollama Cloud", "OpenCode Go") cannot share
-          // one row at this width.
-          RowLayout {
-            id: providerSwitch
-            visible: root.providers.length > 1
+          PanelSeparator { visible: root.allSelected && root.allLimitRows().length > 0; foreground: root.foreground }
+
+          Column {
+            id: allLimitsSection
+            visible: root.allSelected && root.allLimitRows().length > 0
             width: parent.width
             spacing: Style.spacing.sm
 
+            PanelSectionHeader {
+              width: parent.width
+              text: "LIMITS TO WATCH"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
             Repeater {
-              model: root.providers
-
+              model: root.allLimitRows()
               Button {
                 required property var modelData
-                required property int index
-
-                text: ({"codex": "Main", "codex-second": "Second", "claude": "Claude", "opencode-go": "OpenCode",
-                        "ollama-cloud": "Ollama", "commandcode": "CommandCode", "clinepass": "ClinePass"})[modelData.providerId] || modelData.providerName
-                selected: index === root.providerIndex
-                hasCursor: root.cursorActive && index === root.providerIndex
-                bordered: true
+                width: allLimitsSection.width
+                height: Style.space(54)
+                text: ""
+                Accessible.name: root.limitSourceName(modelData.id, modelData.name) + ", " + modelData.title + ", "
+                  + Math.round(modelData.percent * 100) + "% used, " + root.resetDescription(modelData)
+                  + ", show source details"
                 foreground: root.foreground
                 fontFamily: root.fontFamily
-                fontSize: Style.font.bodySmall
-                horizontalPadding: Style.spacing.controlPaddingX
-                verticalPadding: Style.spacing.controlPaddingY
-                Layout.fillWidth: true
-                onClicked: {
-                  root.cursorActive = true
-                  root.selectProvider(index)
+                fontSize: Style.font.caption
+                leftAlign: true
+                focusable: true
+                horizontalPadding: Style.space(6)
+                verticalPadding: Style.space(3)
+                onClicked: root.selectedProviderId = modelData.id
+                Column {
+                  anchors.fill: parent
+                  anchors.margins: Style.space(6)
+                  anchors.rightMargin: Style.space(56)
+                  spacing: Style.space(4)
+                  RowLayout {
+                    width: parent.width
+                    spacing: Style.space(8)
+                    Text {
+                      text: root.limitSourceName(modelData.id, modelData.name) + " · " + modelData.title
+                      color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight; Layout.fillWidth: true
+                    }
+                    Text {
+                      text: Math.round(modelData.percent * 100) + "% used"
+                      color: modelData.percent >= 0.9 ? root.urgent : root.foreground
+                      font.family: root.fontFamily; font.pixelSize: Style.font.caption
+                    }
+                  }
+                  Meter { width: parent.width; value: modelData.percent; alarming: modelData.percent >= 0.9 }
+                  Text {
+                    text: (modelData.stale ? "Last known · " : "") + root.resetDescription(modelData)
+                    color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption
+                  }
                 }
-                onHovered: function(isHovered) { if (isHovered) root.cursorActive = true }
+                Button {
+                  width: Style.space(46)
+                  height: Style.space(28)
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Pin"
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  fontSize: Style.font.caption
+                  focusable: true
+                  Accessible.name: "Pin " + root.limitSourceName(modelData.id, modelData.name) + " " + modelData.title
+                  onClicked: root.togglePin(modelData.id, modelData)
+                }
               }
             }
           }
@@ -739,6 +1151,77 @@ Panel {
             }
           }
 
+          PanelSeparator {
+            visible: hourlySection.visible && (allLimitsSection.visible || limitsSection.visible || balanceSection.visible)
+            foreground: root.foreground
+          }
+
+          Column {
+            id: hourlySection
+            visible: root.providers.length > 0
+            width: parent.width
+            spacing: Style.spacing.md
+            readonly property var rows: root.hourRows()
+            readonly property real peak: root.hourPeak()
+
+            PanelSectionHeader {
+              width: parent.width
+              text: "LATEST 6 HOURS · TODAY"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+            Text {
+              visible: !root.allSelected
+              width: parent.width
+              text: root.hourlyAvailable() ? Number(root.hourlyTotal("tokens")).toLocaleString(Qt.locale("en_US"), "f", 0) + " processed tokens today"
+                                           : root.hourlyData() ? "No indexed token history for this source" : "Hourly history is loading"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+            Repeater {
+              model: hourlySection.rows
+              HourRow {
+                required property var modelData
+                required property int index
+                width: hourlySection.width
+                hour: modelData
+                ratio: Number(modelData.tokens || 0) / hourlySection.peak
+                current: index === 0
+              }
+            }
+            Text {
+              visible: root.hourlyMissingIds().length > 0
+              width: parent.width
+              text: root.hourlyMissingIds().length + " visible source" + (root.hourlyMissingIds().length === 1 ? " has" : "s have") + " no indexed hourly history"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+            Text {
+              visible: root.hourlyTotal("unplacedTokens") > 0
+              width: parent.width
+              text: Number(root.hourlyTotal("unplacedTokens")).toLocaleString(Qt.locale("en_US"), "f", 0)
+                    + " session-summary tokens have no exact hour"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+            Text {
+              visible: !!root.hourlyData()
+              width: parent.width
+              text: root.hourlyData() ? (root.nowMs - Number(root.hourlyData().generatedAt || 0) * 1000 < 60000
+                    ? "Updated just now · local time"
+                    : "Updated " + root.formatDuration(root.nowMs - Number(root.hourlyData().generatedAt || 0) * 1000) + " ago · local time") : ""
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
           // ---------- Usage ----------
           PanelSeparator {
             visible: usageSection.visible
@@ -804,8 +1287,6 @@ Panel {
                 required property var modelData
                 width: modelSection.width
                 row: modelData
-                // Scaled to the heaviest model, so the top row is always full —
-                // the same scale-to-peak the weekly chart uses for its busiest day.
                 share: modelData.total / Math.max(1, root.models[0].total)
               }
             }
@@ -825,19 +1306,6 @@ Panel {
           }
         }
       }
-
-      // Parented to the key catcher, not the Flickable: a child of the
-      // clipping Flickable would be clipped away and paint nothing.
-      QuietScrollBar {
-        parent: keyCatcher
-        x: panelFlick.x + panelFlick.width + Style.space(4)
-        y: panelFlick.y
-        height: panelFlick.height
-        orientation: Qt.Vertical
-        active: panelFlick.moving || panelFlick.flicking
-        size: panelFlick.contentHeight > 0 ? panelFlick.height / panelFlick.contentHeight : 1
-        position: panelFlick.contentHeight > 0 ? panelFlick.contentY / panelFlick.contentHeight : 0
-      }
     }
   }
 
@@ -847,6 +1315,7 @@ Panel {
     property var window: null
 
     readonly property bool alarming: window && window.percent >= 0.9
+      && (!root.resetDate(window) || root.resetMsFor(window) > 0)
 
     spacing: Style.space(6)
 
@@ -879,8 +1348,25 @@ Panel {
         color: limitRow.alarming ? root.urgent : root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
+        anchors.right: pinButton.left
+        anchors.rightMargin: Style.space(8)
+        anchors.verticalCenter: parent.verticalCenter
+      }
+      Button {
+        id: pinButton
+        width: Style.space(50)
+        height: Style.space(24)
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
+        text: root.provider && limitRow.window && root.isPinned(root.provider.providerId, limitRow.window.label, limitRow.window.title)
+          ? "Pinned" : root.pinnedLimits.length >= 3 ? "Full" : "Pin"
+        enabled: text !== "Full"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        fontSize: Style.font.caption
+        focusable: true
+        Accessible.name: text + " " + (limitRow.window ? limitRow.window.title : "") + " limit"
+        onClicked: if (root.provider) root.togglePin(root.provider.providerId, limitRow.window)
       }
     }
 
@@ -937,6 +1423,55 @@ Panel {
 
   // One row per day: label, bar, tokens. Today is picked out in full
   // foreground so the week reads as a run-up to right now.
+  component HourRow: Item {
+    id: hourRow
+    property var hour: null
+    property real ratio: 0
+    property bool current: false
+    implicitHeight: Math.max(hourLabel.implicitHeight, hourValue.implicitHeight) + Style.spacing.sm
+    Accessible.name: (hour ? hour.label : "") + ", " + (hour ? Number(hour.tokens || 0).toLocaleString(Qt.locale("en_US"), "f", 0) : "0") + " tokens"
+
+    Text {
+      id: hourLabel
+      text: hourRow.hour ? hourRow.hour.label : ""
+      color: hourRow.current ? root.foreground : root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      font.bold: hourRow.current
+      anchors.left: parent.left
+      anchors.verticalCenter: parent.verticalCenter
+      width: Style.space(hourRow.hour && hourRow.hour.label.length > 5 ? 92 : 52)
+    }
+    Rectangle {
+      anchors.left: hourLabel.right
+      anchors.right: hourValue.left
+      anchors.leftMargin: Style.space(8)
+      anchors.rightMargin: Style.space(10)
+      anchors.verticalCenter: parent.verticalCenter
+      height: Math.max(Style.space(4), Math.round(Style.spacing.controlHeight * 0.14))
+      radius: height / 2
+      color: root.track
+      Rectangle {
+        height: parent.height
+        width: parent.width * root.clamp(hourRow.ratio, 0, 1)
+        radius: parent.radius
+        color: hourRow.current ? root.foreground : root.alpha(root.foreground, 0.58)
+      }
+    }
+    Text {
+      id: hourValue
+      text: hourRow.hour ? Number(hourRow.hour.tokens || 0).toLocaleString(Qt.locale("en_US"), "f", 0) : "0"
+      color: hourRow.current ? root.foreground : root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      font.bold: hourRow.current
+      horizontalAlignment: Text.AlignRight
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      width: Style.space(90)
+    }
+  }
+
   component DayRow: Item {
     id: dayRow
     property var day: null
@@ -1011,8 +1546,6 @@ Panel {
     }
   }
 
-  // Model rows read as a table: the share bar fills the row behind the label
-  // instead of stacking under it, which keeps the whole dashboard on one screen.
   component ModelRow: Item {
     id: modelRow
     property var row: null
@@ -1080,4 +1613,5 @@ Panel {
       fontFamily: root.fontFamily
     }
   }
+
 }
