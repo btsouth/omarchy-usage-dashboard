@@ -1,6 +1,6 @@
-# Agent Pulse 1.8 candidate
+# Agent Pulse 1.8
 
-This branch holds the dashboard and bar-panel redesign for review. The plugin manifest is `1.8.0-rc.4`; the public installer still follows `main`, so merge only after the candidate is accepted.
+This branch holds the dashboard and bar-panel redesign. The plugin manifest is `1.8.0`; the public installer still follows `main`, so it serves 1.7.0 until this branch is merged and tagged.
 
 ## Compatibility
 
@@ -21,10 +21,12 @@ The candidate adds a recorded Today counter, event-timed hourly tokens, reset-aw
 - The offscreen dashboard check passed at 1000 × 640: source selection, 12/24-hour labels, three pins and individual unpin, live counter updates, and account editing.
 - An isolated v1.7.0 to candidate install preserved settings, ledger bytes, the existing bar entry, and the installer registry, and staged the new QML files and restored model section.
 - A synthetic 10,000-file Codex history took 0.41 seconds on the first local pulse and 0.16 seconds on two unchanged pulses on the development machine. Empty files measure discovery overhead, not real parsing or a user's full history.
+- On the development machine's real 3 GB Codex history, a pulse with nothing new took about 0.12 seconds of wall and CPU time. A copy of its largest transcript (275 MB) cost 1.4 seconds on first read and about 0.65 seconds of CPU on each pulse after the file grew, since a changed file is read again from the start. That is roughly 4% of one core while a view is open and such a session is active. Peak memory was about 80 MB. Pulses that overlapped a full refresh waited on the collector lock instead of working.
+- The candidate ran on the author's Omarchy desktop in daily use, including the bar panel, source picker, pinned limits, and analytics.
 
 ## Before public release
 
-1. Run the candidate on an Omarchy desktop and inspect the real bar panel and analytics at narrow and wide widths, in light and dark themes. Check keyboard navigation, the source picker, reset labels, pinned limits, and the restored model rows. Replace the documentation's labelled panel section map with a fresh real-panel capture.
-2. Try a representative large history with active transcripts to check pulse latency and CPU use over several minutes.
-3. Review draft PR #7, its rendered diff and CI, and the opt-in install pinned to the candidate commit. Keep `main` and the latest stable release unchanged until acceptance.
-4. After acceptance, update the manifest to the final release version, merge, tag, and verify the installer path and installed UI again.
+1. Review PR #7 out of draft, including CodeRabbit's review, and resolve every comment.
+2. Replace the project page's labelled panel section map with a real panel capture, or drop its "will be updated" note.
+3. Merge, tag `v1.8.0`, and verify the default installer path and the installed UI.
+4. Later: read changed transcripts from the last parsed offset so an active long session is not reread in full on each pulse.
