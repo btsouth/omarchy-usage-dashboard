@@ -9,6 +9,7 @@ import math
 import json
 import os
 from pathlib import Path
+import re
 import select
 import socket
 import struct
@@ -116,7 +117,8 @@ def valid_pin(value):
     if not isinstance(value, dict): return None
     provider, label = value.get('provider'), value.get('label')
     if not isinstance(provider, str) or not isinstance(label, str): return None
-    if not provider or len(provider) > 80 or any(not (c.isascii() and (c.isalnum() or c == '-')) for c in provider): return None
+    # Same rule the panel and dashboard loaders apply, so a saved pin is never one they drop.
+    if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,79}', provider): return None
     if not label or len(label) > 120: return None
     title = value.get('title', '')
     if not isinstance(title, str) or len(title) > 120: return None

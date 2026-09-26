@@ -99,6 +99,11 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(c.save_pinned_limit('', ''), [])
         self.assertEqual(c.pinned_limits(), [])
         with self.assertRaises(ValueError): c.save_pinned_limit('../codex', 'Weekly (7-day)')
+        # The panel and dashboard loaders drop these ids, so a saved pin would
+        # hold a slot nobody can see or unpin.
+        for provider in ('Codex-Work', '-codex', 'a' * 81):
+            with self.assertRaises(ValueError): c.save_pinned_limit(provider, 'Weekly (7-day)')
+        self.assertEqual(c.pinned_limits(), [])
 
     def test_pulse_counts_new_codex_usage_without_network_or_duplicate_rows(self):
         now = dt.datetime.now(dt.timezone.utc).isoformat()
